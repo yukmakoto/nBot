@@ -5,37 +5,12 @@ use tokio::time::{timeout, Duration};
 
 const DEFAULT_FFMPEG_IMAGE: &str = "jrottenberg/ffmpeg:6.1-alpine";
 
-fn default_docker_registry() -> String {
-    std::env::var("NBOT_DOCKER_REGISTRY")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "docker.nailed.dev".to_string())
-}
-
-fn qualify_image(image: &str) -> String {
-    let image = image.trim();
-    if image.is_empty() {
-        return DEFAULT_FFMPEG_IMAGE.to_string();
-    }
-
-    // If the first segment looks like a registry (`host[:port]`), keep as-is.
-    let first = image.split('/').next().unwrap_or_default();
-    let has_registry = first.contains('.') || first.contains(':') || first == "localhost";
-    if has_registry {
-        return image.to_string();
-    }
-
-    format!("{}/{}", default_docker_registry(), image)
-}
-
 fn configured_ffmpeg_image() -> String {
     std::env::var("NBOT_FFMPEG_IMAGE")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .map(|s| qualify_image(&s))
-        .unwrap_or_else(|| qualify_image(DEFAULT_FFMPEG_IMAGE))
+        .unwrap_or_else(|| DEFAULT_FFMPEG_IMAGE.to_string())
 }
 
 async fn try_get_local_ffmpeg_version_line() -> Result<Option<String>, String> {
@@ -118,6 +93,7 @@ pub async fn runner_tools() -> Vec<ToolContainer> {
     // Docker image check is best-effort and never affects readiness.
     let docker_detail = match docker_image_exists(&image).await {
         Ok(true) => Some("docker image: present".to_string()),
+        Ok(false) if local_ok => None,
         Ok(false) => Some("docker image: missing".to_string()),
         Err(_) if local_ok => None,
         Err(_) => Some("docker: unavailable".to_string()),
