@@ -110,7 +110,36 @@ async fn webui_login(
         .await
 }
 
-/// 从 Docker 容器日志获取 WebUI Token
+fn trim_token_like(value: &str) -> Option<String> {
+    let token = value
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';')
+        .trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
+fn extract_webui_token_from_json(text: &str) -> Option<String> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(token) = v.get("token").and_then(|t| t.as_str()) {
+            return trim_token_like(token);
+        }
+    }
+
+    // Fallback: tolerate non-standard JSON (e.g. trailing chars / comments).
+    let key_pos = text.find("\"token\"")?;
+    let after_key = &text[(key_pos + "\"token\"".len())..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[(colon_pos + 1)..].trim_start();
+    let after_quote = after_colon.strip_prefix('"')?;
+    let end_quote = after_quote.find('"')?;
+    trim_token_like(&after_quote[..end_quote])
+}
+
+/// 获取 NapCat WebUI Token（优先日志，其次 webui.json）
 pub async fn get_webui_token(container_name: &str) -> Option<String> {
     // 增加日志行数，因为 token 只在启动时输出一次
     let output = Command::new("docker")
@@ -134,43 +163,65 @@ pub async fn get_webui_token(container_name: &str) -> Option<String> {
             || line.contains("webui token:")
         {
             if let Some(token) = line.split("Token:").nth(1) {
-                let token = token
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .trim_matches(|c: char| !c.is_ascii_alphanumeric());
-                if !token.is_empty() {
-                    last_token = Some(token.to_string());
+                if let Some(token) = token.split_whitespace().next().and_then(trim_token_like) {
+                    last_token = Some(token);
                 }
             }
         }
     }
 
     if let Some(token) = last_token {
-        let suffix: String = token
-            .chars()
-            .rev()
-            .take(4)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        if suffix.is_empty() {
-            info!("从容器 {} 获取到 WebUI Token", container_name);
-        } else {
-            info!(
-                "从容器 {} 获取到 WebUI Token（尾号: {}）",
-                container_name, suffix
-            );
-        }
+        info!("从容器 {} 获取到 WebUI Token（docker logs）", container_name);
         return Some(token);
     }
+
+    // Newer NapCat images may not print WebUI token into docker logs anymore; try reading it from config.
+    for path in ["/app/napcat/config/webui.json", "/app/napcat/config/webui.jsonc"] {
+        let out = Command::new("docker")
+            .args(["exec", container_name, "cat", path])
+            .output()
+            .await
+            .ok();
+
+        if let Some(out) = out {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                if let Some(token) = extract_webui_token_from_json(&text) {
+                    info!("从容器 {} 读取到 WebUI Token（{}）", container_name, path);
+                    return Some(token);
+                }
+            }
+        }
+    }
+
     info!(
-        "未能从容器 {} 获取 WebUI Token，日志长度: {} 字节",
+        "未能从容器 {} 获取 WebUI Token（logs/webui.json），日志长度: {} 字节",
         container_name,
         logs.len()
     );
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_token_from_json() {
+        let json = r#"{ "token": "QCgjSiJTwUQd153MwH_vSlh4baXLOETtFfgqSX5oocs" }"#;
+        let got = extract_webui_token_from_json(json).unwrap();
+        assert_eq!(got, "QCgjSiJTwUQd153MwH_vSlh4baXLOETtFfgqSX5oocs");
+    }
+
+    #[test]
+    fn extracts_token_from_nonstandard_text() {
+        let text = r#"
+            // comment
+            { "token": "abc_DEF-123" } trailing
+        "#;
+        let got = extract_webui_token_from_json(text).unwrap();
+        assert_eq!(got, "abc_DEF-123");
+    }
 }
 
 /// 通过 Napcat WebUI HTTP API 检测登录状态并获取二维码
