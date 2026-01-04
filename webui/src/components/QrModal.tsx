@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Copy, QrCode, X } from 'lucide-react';
@@ -59,8 +59,18 @@ function QrModalInner({
   qrImage: string | null;
   onClose: () => void;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const qrValue = qr;
-  const displaySrc = qrValue.startsWith('data:image') ? qrValue : qrImage;
+  const displaySrc =
+    imageFailed
+      ? null
+      : qrValue.startsWith('data:image')
+        ? qrValue
+        : qrImage
+          ? qrImage
+          : qrValue.startsWith('http://') || qrValue.startsWith('https://')
+            ? qrValue
+            : null;
 
   async function copy() {
     try {
@@ -98,10 +108,24 @@ function QrModalInner({
         <div className="p-8 space-y-5">
           <div className="bg-white rounded-[24px] border border-brand-soft p-4 flex items-center justify-center">
             {displaySrc ? (
-              <img src={displaySrc} alt="QR" className="w-64 h-64 object-contain" />
+              <img
+                src={displaySrc}
+                alt="QR"
+                className="w-64 h-64 object-contain"
+                onError={() => setImageFailed(true)}
+              />
             ) : (
               <div className="w-64 h-64 flex items-center justify-center">
-                <div className="w-10 h-10 border-4 border-brand border-t-transparent rounded-full animate-spin" />
+                {imageFailed ? (
+                  <div className="text-center text-text-main/60 font-bold space-y-2">
+                    <div>二维码图片加载失败</div>
+                    {qrValue.startsWith('http') ? (
+                      <div className="text-xs font-semibold">可点击“打开网页”或“复制链接”。</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 border-4 border-brand border-t-transparent rounded-full animate-spin" />
+                )}
               </div>
             )}
           </div>

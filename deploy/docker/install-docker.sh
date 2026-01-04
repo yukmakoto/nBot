@@ -1007,44 +1007,57 @@ fi
 step "Pull images (no build) ..."
 pull_out=""
 pull_code=0
-if [[ -t 1 ]]; then
-  # TTY: show progress.
-  if (cd "${INSTALL_DIR}" && docker compose pull); then
-    pull_code=0
-  else
-    pull_code=1
-    pull_out="$(cd "${INSTALL_DIR}" && docker compose pull 2>&1 || true)"
-  fi
-else
-  # Non-TTY (e.g. remote automation): avoid spammy per-layer progress output.
-  set +e
-  pull_out="$(cd "${INSTALL_DIR}" && docker compose pull -q 2>&1)"
-  pull_code=$?
-  set -e
-fi
+pull_log="$(mktemp)"
+start_spinner "Pulling images ..."
+set +e
+(cd "${INSTALL_DIR}" && docker compose pull -q) >"${pull_log}" 2>&1
+pull_code=$?
+set -e
+stop_spinner "$([[ "${pull_code}" -eq 0 ]] && echo success || echo fail)"
 
 if [[ "${pull_code}" -ne 0 ]]; then
+  pull_out="$(cat "${pull_log}")"
   echo "${pull_out}"
   if echo "${pull_out}" | grep -qiE "unauthorized|authentication required|denied|pull access denied"; then
     echo
     echo "镜像拉取需要登录镜像仓库。"
     docker_login_if_needed
-    if [[ -t 1 ]]; then
-      (cd "${INSTALL_DIR}" && docker compose pull)
-    else
-      (cd "${INSTALL_DIR}" && docker compose pull -q)
+    start_spinner "Pulling images (after login) ..."
+    set +e
+    (cd "${INSTALL_DIR}" && docker compose pull -q) >"${pull_log}" 2>&1
+    pull_code=$?
+    set -e
+    stop_spinner "$([[ "${pull_code}" -eq 0 ]] && echo success || echo fail)"
+    if [[ "${pull_code}" -ne 0 ]]; then
+      echo "$(cat "${pull_log}")"
+      die "镜像拉取失败（鉴权后仍失败）。"
     fi
   else
     die "镜像拉取失败（非鉴权错误）。"
   fi
 fi
+rm -f "${pull_log}" >/dev/null 2>&1 || true
 
 step "Pull NapCat image: ${NBOT_NAPCAT_IMAGE} ..."
-if docker pull "${NBOT_NAPCAT_IMAGE}"; then
+napcat_pull_code=0
+napcat_pull_log="$(mktemp)"
+start_spinner "Pulling NapCat image ..."
+set +e
+docker pull -q "${NBOT_NAPCAT_IMAGE}" >"${napcat_pull_log}" 2>&1
+napcat_pull_code=$?
+set -e
+stop_spinner "$([[ "${napcat_pull_code}" -eq 0 ]] && echo success || echo fail)"
+if [[ "${napcat_pull_code}" -eq 0 ]]; then
   success "NapCat 镜像拉取成功"
 else
+  if [[ -s "${napcat_pull_log}" ]]; then
+    echo
+    echo "NapCat 拉取输出（截断）："
+    tail -n 80 "${napcat_pull_log}" 2>/dev/null || cat "${napcat_pull_log}" || true
+  fi
   warn "NapCat 镜像拉取失败，创建机器人实例时会自动重试"
 fi
+rm -f "${napcat_pull_log}" >/dev/null 2>&1 || true
 
 step "Start services ..."
 (cd "${INSTALL_DIR}" && docker compose up -d 2>&1)
