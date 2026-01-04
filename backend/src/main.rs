@@ -408,7 +408,7 @@ async fn main() {
             axum::http::HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
                 "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; \
-                 connect-src 'self'; img-src 'self' data: https://q1.qlogo.cn https://p.qlogo.cn https://api.qrserver.com https://cdn.jsdelivr.net; \
+                 connect-src 'self'; img-src 'self' data: https://q1.qlogo.cn https://p.qlogo.cn https://txz.qq.com https://api.qrserver.com https://cdn.jsdelivr.net; \
                  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; \
                  script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'",
             ),
