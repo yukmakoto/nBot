@@ -373,27 +373,27 @@ pub async fn napcat_login_monitor(state: SharedState) {
                                                 }
 
                                                 if should_fetch {
+                                                    // Placeholder: keep `qr_image` non-null so the WebUI
+                                                    // can render immediately; we will replace it with a
+                                                    // base64 data-url once fetched.
                                                     *state.runtime.latest_qr_image.write().await =
-                                                        None;
+                                                        Some(qrcode_url.clone());
 
-                                                    let qr_image = if qrcode_url
-                                                        .starts_with("data:image")
-                                                    {
-                                                        Some(qrcode_url.clone())
-                                                    } else {
-                                                        fetch_qr_image_data_url(
-                                                            &client,
-                                                            &qrcode_url,
-                                                        )
-                                                        .await
-                                                    };
+                                                    let qr_image =
+                                                        if qrcode_url.starts_with("data:image") {
+                                                            Some(qrcode_url.clone())
+                                                        } else {
+                                                            fetch_qr_image_data_url(
+                                                                &client,
+                                                                &qrcode_url,
+                                                            )
+                                                            .await
+                                                            .or_else(|| Some(qrcode_url.clone()))
+                                                        };
 
                                                     if let Some(img) = qr_image {
-                                                        let current = state
-                                                            .runtime
-                                                            .latest_qr
-                                                            .read()
-                                                            .await;
+                                                        let current =
+                                                            state.runtime.latest_qr.read().await;
                                                         if current.as_deref()
                                                             == Some(qrcode_url.as_str())
                                                         {

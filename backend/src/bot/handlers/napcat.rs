@@ -227,13 +227,18 @@ pub async fn login_trigger_handler(
                                     *latest_qr = Some(qrcode_url.clone());
                                     let mut latest_qr_image =
                                         state.runtime.latest_qr_image.write().await;
-                                    *latest_qr_image = None;
+                                    // Ensure WebUI can render immediately even if data-url fetch is slow.
+                                    // We first store the URL (or data:image) as a placeholder, then try to
+                                    // replace it with a base64 data-url when possible.
+                                    *latest_qr_image = Some(qrcode_url.clone());
                                 }
 
                                 let qr_image = if qrcode_url.starts_with("data:image") {
                                     Some(qrcode_url.clone())
                                 } else {
-                                    fetch_qr_image_data_url(&client, &qrcode_url).await
+                                    fetch_qr_image_data_url(&client, &qrcode_url)
+                                        .await
+                                        .or_else(|| Some(qrcode_url.clone()))
                                 };
 
                                 if let Some(img) = qr_image.as_ref() {

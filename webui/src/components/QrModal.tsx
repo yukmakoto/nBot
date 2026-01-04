@@ -22,6 +22,7 @@ function normalizeQrImage(value: unknown): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith('data:image')) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
   return null;
 }
 
