@@ -224,6 +224,7 @@ pub(super) async fn read_file_as_data_url(
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
+#[allow(dead_code)]
 pub(in super::super::super) fn resolve_llm_config(
     state: &SharedState,
     bot_id: &str,

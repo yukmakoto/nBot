@@ -98,6 +98,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForward {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 content,
@@ -116,6 +117,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         title,
@@ -127,6 +129,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForwardFromUrl {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 url,
@@ -149,6 +152,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         title,
@@ -166,6 +170,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForwardImageFromUrl {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 url,
@@ -191,6 +196,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardImageFromUrlInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         url,
@@ -209,6 +215,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForwardVideoFromUrl {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 url,
@@ -240,6 +247,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardVideoFromUrlInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         url,
@@ -264,6 +272,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForwardAudioFromUrl {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 url,
@@ -288,6 +297,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardAudioFromUrlInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         url,
@@ -305,6 +315,7 @@ pub(super) async fn process_plugin_outputs(
             PluginOutput::CallLlmAndForwardMediaBundle {
                 user_id,
                 group_id,
+                model_name,
                 system_prompt,
                 prompt,
                 title,
@@ -332,6 +343,7 @@ pub(super) async fn process_plugin_outputs(
                     LlmForwardMediaBundleInput {
                         user_id: *user_id,
                         group_id: *group_id,
+                        model_name: model_name.as_deref(),
                         system_prompt,
                         prompt,
                         title,
@@ -389,22 +401,8 @@ async fn send_forward_message(
         .map(|b| b.value().name.clone())
         .unwrap_or_else(|| "nBot".to_string());
 
-    let bot_qq = state
-        .bots
-        .get(bot_id)
-        .and_then(|b| {
-            b.value()
-                .qq_id
-                .as_deref()
-                .and_then(|s| s.parse::<u64>().ok())
-        })
-        .or_else(|| {
-            bot_id
-                .strip_prefix("qq_")
-                .and_then(|s| s.parse::<u64>().ok())
-        })
-        .or_else(|| bot_id.parse::<u64>().ok())
-        .unwrap_or(10000);
+    // Privacy: do not expose any real QQ number in forward nodes metadata.
+    let bot_qq = 10000u64;
 
     let forward_nodes: Vec<serde_json::Value> = nodes
         .iter()

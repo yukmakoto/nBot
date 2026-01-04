@@ -39,6 +39,9 @@ pub enum PluginOutput {
     CallLlmAndForward {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         content: String,
@@ -48,6 +51,9 @@ pub enum PluginOutput {
     CallLlmAndForwardFromUrl {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         url: String,
@@ -65,6 +71,9 @@ pub enum PluginOutput {
     CallLlmAndForwardImageFromUrl {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         url: String,
@@ -88,6 +97,9 @@ pub enum PluginOutput {
     CallLlmAndForwardVideoFromUrl {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         url: String,
@@ -124,6 +136,9 @@ pub enum PluginOutput {
     CallLlmAndForwardAudioFromUrl {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         url: String,
@@ -146,6 +161,9 @@ pub enum PluginOutput {
     CallLlmAndForwardMediaBundle {
         user_id: u64,
         group_id: u64,
+        /// 指定模型映射名称（为空则使用默认模型）
+        #[serde(default)]
+        model_name: Option<String>,
         system_prompt: String,
         prompt: String,
         title: String,

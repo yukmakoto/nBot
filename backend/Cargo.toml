@@ -57,3 +57,6 @@ comrak = { version = "0.24", features = ["syntect"] }
 
 # Image decoding/resizing (multimodal inputs)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+
+# Generate QR code images for WebUI login
+qrcode = "0.14"

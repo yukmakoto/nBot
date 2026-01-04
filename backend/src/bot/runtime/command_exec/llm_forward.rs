@@ -12,7 +12,7 @@ mod redact;
 
 use download::{download_document_text, DocumentMeta};
 use multimodal::common::{
-    call_chat_completions, log_llm_error, log_llm_len, reply_err, resolve_llm_config,
+    call_chat_completions, log_llm_error, log_llm_len, reply_err, resolve_llm_config_by_name,
     send_llm_markdown_as_forward_image, SendForwardImageInput,
 };
 pub(super) use multimodal::{
@@ -50,6 +50,7 @@ pub(super) enum LlmForwardSource<'a> {
 pub(super) struct LlmForwardInput<'a> {
     pub(super) user_id: u64,
     pub(super) group_id: u64,
+    pub(super) model_name: Option<&'a str>,
     pub(super) system_prompt: &'a str,
     pub(super) prompt: &'a str,
     pub(super) title: &'a str,
@@ -59,6 +60,7 @@ pub(super) struct LlmForwardInput<'a> {
 pub(super) struct LlmForwardImageFromUrlInput<'a> {
     pub(super) user_id: u64,
     pub(super) group_id: u64,
+    pub(super) model_name: Option<&'a str>,
     pub(super) system_prompt: &'a str,
     pub(super) prompt: &'a str,
     pub(super) url: &'a str,
@@ -75,6 +77,7 @@ pub(super) struct LlmForwardImageFromUrlInput<'a> {
 pub(super) struct LlmForwardVideoFromUrlInput<'a> {
     pub(super) user_id: u64,
     pub(super) group_id: u64,
+    pub(super) model_name: Option<&'a str>,
     pub(super) system_prompt: &'a str,
     pub(super) prompt: &'a str,
     pub(super) url: &'a str,
@@ -97,6 +100,7 @@ pub(super) struct LlmForwardVideoFromUrlInput<'a> {
 pub(super) struct LlmForwardAudioFromUrlInput<'a> {
     pub(super) user_id: u64,
     pub(super) group_id: u64,
+    pub(super) model_name: Option<&'a str>,
     pub(super) system_prompt: &'a str,
     pub(super) prompt: &'a str,
     pub(super) url: &'a str,
@@ -112,6 +116,7 @@ pub(super) struct LlmForwardAudioFromUrlInput<'a> {
 pub(super) struct LlmForwardMediaBundleInput<'a> {
     pub(super) user_id: u64,
     pub(super) group_id: u64,
+    pub(super) model_name: Option<&'a str>,
     pub(super) system_prompt: &'a str,
     pub(super) prompt: &'a str,
     pub(super) title: &'a str,
@@ -177,7 +182,7 @@ pub(super) async fn process_llm_forward(
         },
     };
 
-    let llm = match resolve_llm_config(state, bot_id) {
+    let llm = match resolve_llm_config_by_name(state, bot_id, input.model_name) {
         Ok(v) => v,
         Err(e) => {
             reply_err(runtime, bot_id, user_id, group_id, &e).await;

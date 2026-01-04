@@ -1,13 +1,31 @@
 // 新成员验证插件
 // 当新成员进群时，要求在指定时间内发言，否则自动踢出
 
-const { log, storage, callApi, sendMessage, getConfig, now } = globalThis.nbot;
+const { log, storage, callApi, sendMessage, fetchGroupMemberList, getConfig, now, at } = globalThis.nbot;
 
 // 待验证成员存储 key
 const PENDING_KEY = "pending_members";
+const BOT_NAME_KEY = "bot_name_by_group";
+
+let selfId = null;
+const pendingNameRequests = new Map();
+const adminCache = new Map(); // groupId -> { isAdmin: boolean, checkedAt: number }
 
 let lastCleanupAt = 0;
 let warnedAdminCheck = false;
+
+async function ensureSelfId() {
+  if (selfId) return selfId;
+  try {
+    const resp = await callApi("get_login_info", {});
+    const data = (resp && (resp.data ?? resp)) || {};
+    const uid = String(data.user_id ?? "").trim();
+    if (uid) selfId = uid;
+  } catch (e) {
+    log.warn(`[member-verify] 获取登录号信息失败（get_login_info）：${e}`);
+  }
+  return selfId;
+}
 
 // 获取待验证成员列表
 function getPendingMembers() {
@@ -17,6 +35,32 @@ function getPendingMembers() {
 // 保存待验证成员列表
 function savePendingMembers(pending) {
   storage.set(PENDING_KEY, pending);
+}
+
+function getBotNames() {
+  return storage.get(BOT_NAME_KEY) || {};
+}
+
+function saveBotNames(map) {
+  storage.set(BOT_NAME_KEY, map);
+}
+
+function resolveMemberDisplayName(member) {
+  if (!member || typeof member !== "object") return null;
+  const card = String(member.card || "").trim();
+  if (card) return card;
+  const nickname = String(member.nickname || "").trim();
+  if (nickname) return nickname;
+  const name = String(member.name || "").trim();
+  if (name) return name;
+  return null;
+}
+
+function safeUserLabel(userId, nickname) {
+  const name = String(nickname || "").trim();
+  if (name) return name;
+  // Avoid leaking QQ number. Use @ mention placeholder (will be sanitized server-side).
+  return at ? at(userId) : "成员";
 }
 
 // 生成随机超时时间（秒）
@@ -73,18 +117,20 @@ function checkAndKickExpiredGroup(groupId, config) {
 
   for (const { groupId, userId, nickname } of expired) {
     try {
-      log.info(`[member-verify] 踢出超时成员: ${userId} (${nickname}) from group ${groupId}`);
-
       callApi("set_group_kick", {
         group_id: Number(groupId),
         user_id: Number(userId),
         reject_add_request: config.kick_reject_reapply || false,
       });
 
+      const botNames = getBotNames();
+      const operatorName = String(botNames[String(groupId)] || "").trim() || "管理员";
+
       const kickMsg = formatMessage(
-        config.kick_message || "用户 {user} 未在规定时间内完成验证，已被移出群聊。",
+        config.kick_message || "{operator} 将 {user} 移出群聊：未在规定时间内完成验证。",
         {
-          user: nickname || userId,
+          operator: operatorName,
+          user: safeUserLabel(userId, nickname),
         },
       );
       sendMessage(groupId, kickMsg);
@@ -96,9 +142,46 @@ function checkAndKickExpiredGroup(groupId, config) {
 
 // 检查机器人是否是管理员
 async function isBotAdmin(groupId) {
-  // 当前插件运行时不支持同步读取群权限信息，无法准确判断机器人是否为管理员。
-  // 如踢人失败，请检查机器人是否具备群管理权限。
-  return true;
+  const gid = Number(groupId);
+  if (!Number.isFinite(gid) || gid <= 0) return false;
+
+  await ensureSelfId();
+  if (!selfId) {
+    if (!warnedAdminCheck) {
+      warnedAdminCheck = true;
+      log.warn("[member-verify] 无法获取机器人 self_id，跳过管理员校验（将视为非管理员）");
+    }
+    return false;
+  }
+
+  const cacheKey = String(gid);
+  const cached = adminCache.get(cacheKey);
+  const ts = now();
+  if (cached && typeof cached.checkedAt === "number" && ts - cached.checkedAt < 60_000) {
+    return !!cached.isAdmin;
+  }
+
+  try {
+    const resp = await callApi("get_group_member_info", {
+      group_id: gid,
+      user_id: Number(selfId),
+      no_cache: false,
+    });
+
+    const data = (resp && (resp.data ?? resp)) || {};
+    const role = String(data.role || "").trim().toLowerCase();
+    const isAdmin = role === "admin" || role === "owner";
+
+    adminCache.set(cacheKey, { isAdmin, checkedAt: ts });
+    return isAdmin;
+  } catch (e) {
+    if (!warnedAdminCheck) {
+      warnedAdminCheck = true;
+      log.warn(`[member-verify] 读取机器人群权限失败，将视为非管理员（可关闭 require_admin 或检查 OneBot 接口）: ${e}`);
+    }
+    adminCache.set(cacheKey, { isAdmin: false, checkedAt: ts });
+    return false;
+  }
 }
 
 return {
@@ -135,9 +218,14 @@ return {
   async onNotice(ctx) {
     const config = getConfig();
 
+    if (ctx && ctx.self_id && selfId === null) {
+      const v = String(ctx.self_id).trim();
+      selfId = v ? v : null;
+    }
+
     if (config.require_admin && !warnedAdminCheck) {
       warnedAdminCheck = true;
-      log.warn("[member-verify] 提示：当前运行时无法自动检测机器人是否为群管理员；如踢人失败请检查机器人权限");
+      log.info("[member-verify] 已启用 require_admin：仅当机器人为群管理员/群主时才会触发验证");
     }
 
     // Best-effort cleanup for this group to improve timeout handling (interval throttled)
@@ -156,8 +244,6 @@ return {
     }
 
     const { user_id: userId, group_id: groupId, sub_type: subType } = ctx;
-
-    log.info(`[member-verify] 新成员进群: ${userId} -> ${groupId} (${subType})`);
 
     // 检查是否需要管理员权限
     if (config.require_admin) {
@@ -186,20 +272,26 @@ return {
       joinTime: now(),
       expireTime: expireTime,
       timeout: timeout,
-      nickname: String(userId) // 暂时用 QQ 号作为昵称
+      nickname: ""
     };
 
     savePendingMembers(pending);
 
+    // Best-effort: fetch member list once to resolve nicknames (no QQ number in outputs).
+    // Results delivered via onGroupInfoResponse.
+    if (groupId) {
+      const requestId = `member-verify-names-${groupKey}-${String(userId)}-${now()}`;
+      pendingNameRequests.set(requestId, { groupId: groupKey, userId: String(userId) });
+      fetchGroupMemberList(requestId, groupId);
+    }
+
     // 发送欢迎消息
     const welcomeMsg = formatMessage(config.welcome_message || "{user} 欢迎加入本群！请在 {timeout} 秒内发送任意消息完成验证，否则将被移出群聊。", {
-      user: `[CQ:at,qq=${userId}]`,
+      user: safeUserLabel(userId, ""),
       timeout: String(timeout)
     });
 
     sendMessage(groupId, welcomeMsg);
-
-    log.info(`[member-verify] 已记录待验证成员: ${userId}, 超时时间: ${timeout}秒`);
 
     return true;
   },
@@ -230,6 +322,7 @@ return {
     const userKey = String(userId);
 
     if (pending[groupKey] && pending[groupKey][userKey]) {
+      const nickname = pending[groupKey][userKey].nickname;
       // 验证成功，移除待验证状态
       delete pending[groupKey][userKey];
 
@@ -239,18 +332,51 @@ return {
 
       savePendingMembers(pending);
 
-      log.info(`[member-verify] 成员验证成功: ${userId} in group ${groupId}`);
-
       // 发送验证成功消息
       const successMsg = config.verify_success_message;
       if (successMsg) {
         const formattedMsg = formatMessage(successMsg, {
-          user: `[CQ:at,qq=${userId}]`
+          user: safeUserLabel(userId, nickname)
         });
         sendMessage(groupId, formattedMsg);
       }
     }
 
+    return true;
+  }
+
+  ,async onGroupInfoResponse(resp) {
+    try {
+      if (!resp || resp.success !== true) return true;
+      if (resp.infoType !== "group_member_list") return true;
+
+      const requestId = String(resp.requestId || "");
+      const req = pendingNameRequests.get(requestId);
+      if (!req) return true;
+      pendingNameRequests.delete(requestId);
+
+      const members = Array.isArray(resp.data) ? resp.data : [];
+      const pending = getPendingMembers();
+      const groupKey = String(req.groupId);
+      const userKey = String(req.userId);
+
+      const me = selfId ? members.find((m) => String(m.user_id) === String(selfId)) : null;
+      const meName = resolveMemberDisplayName(me);
+      if (meName) {
+        const botNames = getBotNames();
+        botNames[groupKey] = meName;
+        saveBotNames(botNames);
+      }
+
+      const target = members.find((m) => String(m.user_id) === userKey);
+      const name = resolveMemberDisplayName(target);
+      if (name && pending[groupKey] && pending[groupKey][userKey]) {
+        pending[groupKey][userKey].nickname = name;
+        savePendingMembers(pending);
+      }
+    } catch (e) {
+      log.warn(`[member-verify] onGroupInfoResponse error: ${e}`);
+    }
     return true;
   }
 };

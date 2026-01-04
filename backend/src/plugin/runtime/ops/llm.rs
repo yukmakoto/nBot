@@ -151,6 +151,7 @@ pub(in super::super) fn op_call_llm_forward(
         .push(PluginOutput::CallLlmAndForward {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: None,
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             content: content.to_string(),
@@ -160,6 +161,8 @@ pub(in super::super) fn op_call_llm_forward(
 
 #[derive(serde::Deserialize, Default)]
 struct CallLlmForwardFromUrlPayload {
+    #[serde(default)]
+    model_name: Option<String>,
     url: String,
     title: String,
     #[serde(default)]
@@ -203,6 +206,7 @@ pub(in super::super) fn op_call_llm_forward_from_url(
         .push(PluginOutput::CallLlmAndForwardFromUrl {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: payload.model_name.filter(|s| !s.trim().is_empty()),
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             url: payload.url,
@@ -219,6 +223,8 @@ pub(in super::super) fn op_call_llm_forward_from_url(
 
 #[derive(serde::Deserialize, Default)]
 struct CallLlmForwardImageFromUrlPayload {
+    #[serde(default)]
+    model_name: Option<String>,
     url: String,
     title: String,
     #[serde(default)]
@@ -268,6 +274,7 @@ pub(in super::super) fn op_call_llm_forward_image_from_url(
         .push(PluginOutput::CallLlmAndForwardImageFromUrl {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: payload.model_name.filter(|s| !s.trim().is_empty()),
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             url: payload.url,
@@ -290,6 +297,8 @@ pub(in super::super) fn op_call_llm_forward_image_from_url(
 
 #[derive(serde::Deserialize, Default)]
 struct CallLlmForwardVideoFromUrlPayload {
+    #[serde(default)]
+    model_name: Option<String>,
     url: String,
     title: String,
     #[serde(default)]
@@ -351,6 +360,7 @@ pub(in super::super) fn op_call_llm_forward_video_from_url(
         .push(PluginOutput::CallLlmAndForwardVideoFromUrl {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: payload.model_name.filter(|s| !s.trim().is_empty()),
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             url: payload.url,
@@ -379,6 +389,8 @@ pub(in super::super) fn op_call_llm_forward_video_from_url(
 
 #[derive(serde::Deserialize, Default)]
 struct CallLlmForwardAudioFromUrlPayload {
+    #[serde(default)]
+    model_name: Option<String>,
     url: String,
     title: String,
     #[serde(default)]
@@ -440,6 +452,7 @@ pub(in super::super) fn op_call_llm_forward_audio_from_url(
         .push(PluginOutput::CallLlmAndForwardAudioFromUrl {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: payload.model_name.filter(|s| !s.trim().is_empty()),
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             url: payload.url,
@@ -458,6 +471,8 @@ pub(in super::super) fn op_call_llm_forward_audio_from_url(
 
 #[derive(serde::Deserialize, Default)]
 struct CallLlmForwardMediaBundlePayload {
+    #[serde(default)]
+    model_name: Option<String>,
     title: String,
     #[serde(default)]
     text: Option<String>,
@@ -519,6 +534,7 @@ pub(in super::super) fn op_call_llm_forward_media_bundle(
         .push(PluginOutput::CallLlmAndForwardMediaBundle {
             user_id: user_id as u64,
             group_id: group_id as u64,
+            model_name: payload.model_name.filter(|s| !s.trim().is_empty()),
             system_prompt: system_prompt.to_string(),
             prompt: prompt.to_string(),
             title: payload.title,

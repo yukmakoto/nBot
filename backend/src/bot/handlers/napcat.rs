@@ -30,6 +30,10 @@ async fn fetch_qr_image_data_url(client: &reqwest::Client, url: &str) -> Option<
         .trim()
         .to_string();
 
+    if !mime.starts_with("image/") {
+        return None;
+    }
+
     let bytes = resp.bytes().await.ok()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:{mime};base64,{b64}"))
@@ -222,24 +226,23 @@ pub async fn login_trigger_handler(
                         if let Some(qrcode_url) = data.qrcodeurl {
                             let qrcode_url = qrcode_url.trim().to_string();
                             if !qrcode_url.is_empty() {
+                                let qr_image = if qrcode_url.starts_with("data:image") {
+                                    Some(qrcode_url.clone())
+                                } else {
+                                    let fetched = fetch_qr_image_data_url(&client, &qrcode_url).await;
+                                    match fetched {
+                                        Some(v) => Some(v),
+                                        None => crate::bot::generate_qr_png_data_url(&qrcode_url),
+                                    }
+                                };
+
                                 {
                                     let mut latest_qr = state.runtime.latest_qr.write().await;
                                     *latest_qr = Some(qrcode_url.clone());
                                     let mut latest_qr_image =
                                         state.runtime.latest_qr_image.write().await;
-                                    // Ensure WebUI can render immediately even if data-url fetch is slow.
-                                    // We first store the URL (or data:image) as a placeholder, then try to
-                                    // replace it with a base64 data-url when possible.
-                                    *latest_qr_image = Some(qrcode_url.clone());
+                                    *latest_qr_image = qr_image.clone();
                                 }
-
-                                let qr_image = if qrcode_url.starts_with("data:image") {
-                                    Some(qrcode_url.clone())
-                                } else {
-                                    fetch_qr_image_data_url(&client, &qrcode_url)
-                                        .await
-                                        .or_else(|| Some(qrcode_url.clone()))
-                                };
 
                                 if let Some(img) = qr_image.as_ref() {
                                     let current = state.runtime.latest_qr.read().await;

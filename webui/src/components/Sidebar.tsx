@@ -7,6 +7,7 @@ import {
   Menu,
   MessageSquare,
   Puzzle,
+  ScrollText,
   Settings,
   Terminal,
   Users,
@@ -29,6 +30,7 @@ const navItems: NavItem[] = [
   { to: '/llm', label: '对话服务', icon: <MessageSquare className="w-5 h-5" /> },
   { to: '/tools', label: '工具服务', icon: <Wrench className="w-5 h-5" /> },
   { to: '/commands', label: '指令管理', icon: <Terminal className="w-5 h-5" /> },
+  { to: '/logs', label: '日志', icon: <ScrollText className="w-5 h-5" /> },
   { to: '/relations', label: '好友/群组', icon: <Users className="w-5 h-5" /> },
   { to: '/settings', label: '系统设置', icon: <Settings className="w-5 h-5" /> },
 ];

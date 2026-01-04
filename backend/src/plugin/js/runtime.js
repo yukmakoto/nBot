@@ -58,9 +58,11 @@ globalThis.nbot = {
     fileName = "",
     timeoutMs = 30000,
     maxBytes = 2_000_000,
-    maxChars = 50_000
+    maxChars = 50_000,
+    options = {}
   ) => {
     const payload = {
+      model_name: options.modelName ? String(options.modelName) : null,
       url: String(url),
       title: String(title),
       file_name: fileName ? String(fileName) : null,
@@ -91,9 +93,11 @@ globalThis.nbot = {
     maxWidth = 1024,
     maxHeight = 1024,
     jpegQuality = 85,
-    maxOutputBytes = 2_000_000
+    maxOutputBytes = 2_000_000,
+    options = {}
   ) => {
     const payload = {
+      model_name: options.modelName ? String(options.modelName) : null,
       url: String(url),
       title: String(title),
       file_name: fileName ? String(fileName) : null,
@@ -133,9 +137,11 @@ globalThis.nbot = {
     transcriptionModel = "whisper-1",
     maxAudioSeconds = 180,
     requireTranscript = false,
-    mode = "direct"
+    mode = "direct",
+    options = {}
   ) => {
     const payload = {
+      model_name: options.modelName ? String(options.modelName) : null,
       url: String(url),
       title: String(title),
       file_name: fileName ? String(fileName) : null,
@@ -174,9 +180,11 @@ globalThis.nbot = {
     maxBytes = 20_000_000,
     maxAudioSeconds = 180,
     requireTranscript = false,
-    recordFile = ""
+    recordFile = "",
+    options = {}
   ) => {
     const payload = {
+      model_name: options.modelName ? String(options.modelName) : null,
       url: String(url),
       title: String(title),
       file_name: fileName ? String(fileName) : null,
@@ -207,6 +215,7 @@ globalThis.nbot = {
     options = {}
   ) => {
     const payload = {
+      model_name: options.modelName ? String(options.modelName) : null,
       title: String(title || "Multimodal Analysis"),
       text: text ? String(text) : null,
       items: Array.isArray(items) ? items : [],

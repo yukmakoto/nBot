@@ -1,15 +1,126 @@
 use crate::models::SharedState;
 use crate::plugin::InstalledPlugin;
+use crate::plugin::types::ConfigSelectOption;
 use axum::extract::{Json, Path, State};
 use serde_json::json;
 use tracing::warn;
 
 use super::commands::register_plugin_commands;
 
+fn get_json_string_by_path(value: &serde_json::Value, path: &str) -> Option<String> {
+    let mut cur = value;
+    for part in path.split('.') {
+        let key = part.trim();
+        if key.is_empty() {
+            return None;
+        }
+        cur = cur.get(key)?;
+    }
+    cur.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn build_llm_mapping_options(state: &SharedState) -> Vec<ConfigSelectOption> {
+    let Some(m) = state.modules.get("llm") else {
+        return Vec::new();
+    };
+    let models = m.config.get("models").and_then(|v| v.as_object());
+    let default_alias = m
+        .config
+        .get("default_model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .trim()
+        .to_string();
+
+    let mut out: Vec<ConfigSelectOption> = Vec::new();
+    if let Some(models) = models {
+        let mut keys: Vec<String> = models.keys().cloned().collect();
+        keys.sort();
+        for alias in keys {
+            let label = models
+                .get(&alias)
+                .and_then(|v| v.as_object())
+                .and_then(|o| {
+                    let p = o.get("provider").and_then(|v| v.as_str())?.trim();
+                    let m = o.get("model").and_then(|v| v.as_str())?.trim();
+                    (!p.is_empty() && !m.is_empty()).then(|| format!("{alias} · {p}/{m}"))
+                })
+                .unwrap_or_else(|| alias.clone());
+            out.push(ConfigSelectOption {
+                value: alias,
+                label,
+            });
+        }
+    }
+
+    if !default_alias.is_empty() && !out.iter().any(|o| o.value == default_alias) {
+        out.insert(
+            0,
+            ConfigSelectOption {
+                value: default_alias.clone(),
+                label: format!("{default_alias} · (默认)"),
+            },
+        );
+    }
+
+    out
+}
+
+fn is_llm_mapping_field(item: &crate::plugin::types::ConfigSchemaItem) -> bool {
+    if !item.field_type.eq_ignore_ascii_case("string") {
+        return false;
+    }
+    let key = item.key.to_lowercase();
+    if !key.contains("model") {
+        return false;
+    }
+    let desc = item.description.as_deref().unwrap_or("");
+    desc.contains("模型") && (desc.contains("映射") || desc.contains("别名") || desc.contains("LLM"))
+}
+
 pub async fn list_installed_handler(
     State(state): State<SharedState>,
 ) -> Json<Vec<InstalledPlugin>> {
     let mut plugins = state.plugins.list();
+    let llm_options = build_llm_mapping_options(&state);
+    if !llm_options.is_empty() {
+        for plugin in plugins.iter_mut() {
+            let config = plugin.manifest.config.clone();
+            for item in plugin.manifest.config_schema.iter_mut() {
+                if !is_llm_mapping_field(item) {
+                    continue;
+                }
+
+                let mut options = llm_options.clone();
+
+                if let Some(current) = get_json_string_by_path(&config, &item.key) {
+                    if !options.iter().any(|o| o.value == current) {
+                        options.push(ConfigSelectOption {
+                            value: current.clone(),
+                            label: format!("{current} · (未映射)"),
+                        });
+                    }
+                }
+                if let Some(def) = item
+                    .default
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                {
+                    if !options.iter().any(|o| o.value == def) {
+                        options.push(ConfigSelectOption {
+                            value: def.clone(),
+                            label: format!("{def} · (默认值)"),
+                        });
+                    }
+                }
+
+                item.field_type = "select".to_string();
+                item.options = Some(options);
+            }
+        }
+    }
     plugins.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
     Json(plugins)
 }

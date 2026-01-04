@@ -11,7 +11,7 @@ use crate::models::SharedState;
 use super::super::LlmForwardImageFromUrlInput;
 use super::common::{
     call_chat_completions, download_binary_to_temp, log_llm_error, log_llm_len, reply_err,
-    resolve_llm_config, send_llm_markdown_as_forward_image, SendForwardImageInput,
+    resolve_llm_config_by_name, send_llm_markdown_as_forward_image, SendForwardImageInput,
 };
 
 #[derive(Debug, Clone)]
@@ -158,7 +158,7 @@ pub(in super::super::super) async fn process_llm_forward_image_from_url(
         }
     };
 
-    let llm = match resolve_llm_config(state, bot_id) {
+    let llm = match resolve_llm_config_by_name(state, bot_id, input.model_name) {
         Ok(v) => v,
         Err(e) => {
             reply_err(runtime, bot_id, user_id, group_id, &e).await;

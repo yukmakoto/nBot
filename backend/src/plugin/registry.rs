@@ -57,6 +57,7 @@ impl PluginRegistry {
         }
 
         // Dockerfile puts built-in data here; entrypoint copies it into the persistent volume.
+        candidates.push(PathBuf::from("/app/data.seed"));
         candidates.push(PathBuf::from("data.seed"));
 
         candidates.into_iter().find(|p| p.exists() && p.is_dir())

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Copy, QrCode, X } from 'lucide-react';
@@ -61,6 +61,10 @@ function QrModalInner({
   onClose: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [qr, qrImage]);
   const qrValue = qr;
   const displaySrc =
     imageFailed
@@ -74,12 +78,39 @@ function QrModalInner({
             : null;
 
   async function copy() {
+    const text = qrValue;
     try {
-      await navigator.clipboard.writeText(qrValue);
-      toast.success('二维码链接已复制');
-    } catch {
-      toast.error('复制失败：浏览器不支持或权限不足');
-    }
+      if (window.isSecureContext && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        toast.success('二维码链接已复制');
+        return;
+      }
+    } catch {}
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (ok) {
+        toast.success('二维码链接已复制');
+        return;
+      }
+    } catch {}
+
+    try {
+      window.prompt('复制此链接', text);
+      return;
+    } catch {}
+
+    toast.error('复制失败：请手动复制链接');
   }
 
   return (

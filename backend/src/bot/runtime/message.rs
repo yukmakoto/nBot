@@ -1,11 +1,13 @@
 use crate::command::{Command, CommandAction};
 use crate::models::SharedState;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::info;
 
 use super::command_exec::{execute_command, process_plugin_outputs_with_source, CommandExecInput};
 use super::connection::{BotRuntime, GroupSendStatus};
+use super::privacy;
 
 mod reply;
 
@@ -50,6 +52,27 @@ fn parse_reply_id_from_raw(raw_message: &str) -> Option<u64> {
         return None;
     }
     digits.parse().ok()
+}
+
+fn collect_cq_at_ids_from_raw(raw_message: &str, out: &mut HashSet<String>) {
+    let mut rest = raw_message;
+    while let Some(start) = rest.find("[CQ:at,qq=") {
+        rest = &rest[start + "[CQ:at,qq=".len()..];
+        let end = match rest.find(']') {
+            Some(i) => i,
+            None => break,
+        };
+        let seg = &rest[..end];
+        rest = &rest[end + 1..];
+
+        let qq_raw = seg.split(',').next().unwrap_or("").trim();
+        if qq_raw.eq_ignore_ascii_case("all") || qq_raw.is_empty() {
+            continue;
+        }
+        if qq_raw.chars().all(|c| c.is_ascii_digit()) {
+            out.insert(qq_raw.to_string());
+        }
+    }
 }
 
 fn decode_basic_html_entities(s: &str) -> String {
@@ -158,7 +181,7 @@ async fn handle_message(
     let message_type = event["message_type"].as_str().unwrap_or("unknown");
     let user_id = parse_u64_field(event.get("user_id")).unwrap_or(0);
     let group_id = parse_u64_field(event.get("group_id"));
-    let raw_message = event["raw_message"].as_str().unwrap_or("");
+    let raw_message = event["raw_message"].as_str().unwrap_or("").to_string();
     let user_id_raw = event.get("user_id").cloned().unwrap_or(Value::Null);
     let group_id_raw = event.get("group_id").cloned().unwrap_or(Value::Null);
     let user_id_str = user_id.to_string();
@@ -180,88 +203,118 @@ async fn handle_message(
     state.message_stats.check_reset().await;
     state.message_stats.inc_message();
 
-    info!(
-        "[{}] 收到消息 ({}) from {}: {}",
-        bot_id, message_type, user_id, raw_message
-    );
-
-    let is_admin = is_admin(state, bot_id, user_id);
-    let is_super_admin = is_super_admin(state, bot_id, user_id);
-
-    // 调用插件 preMessage 钩子（包括白名单过滤等）
-    let pre_msg_ctx = json!({
-        // Keep original type for plugin (number/string), and also provide string forms for safety.
-        "user_id": user_id_raw.clone(),
-        "user_id_str": user_id_str.clone(),
-        "group_id": group_id_raw.clone(),
-        "group_id_str": group_id_str.clone(),
-        "self_id": self_id,
-        "self_id_str": self_id_str,
-        "at_bot": at_bot,
-        "message_type": message_type,
-        "raw_message": raw_message,
-        "message_id": event.get("message_id").cloned().unwrap_or(Value::Null),
-        "message": event.get("message").cloned().unwrap_or(Value::Null),
-        "is_admin": is_admin,
-        "is_super_admin": is_super_admin,
-    });
-    let pre_msg_result = state.plugin_manager.pre_message(pre_msg_ctx).await;
-
-    // 处理插件输出（支持 LLM 回调）
-    process_plugin_outputs_with_source(state, runtime, bot_id, &pre_msg_result.outputs).await;
-
-    if !pre_msg_result.allow && !is_super_admin {
-        info!("[{}] 消息被插件过滤", bot_id);
-        return;
+    let mut sensitive_ids: HashSet<String> = HashSet::new();
+    if user_id > 0 {
+        sensitive_ids.insert(user_id.to_string());
+    }
+    if let Some(sid) = self_id {
+        sensitive_ids.insert(sid.to_string());
+    }
+    collect_cq_at_ids_from_raw(&raw_message, &mut sensitive_ids);
+    if let Some(segments) = event.get("message").and_then(|m| m.as_array()) {
+        for seg in segments {
+            if seg.get("type").and_then(|t| t.as_str()) != Some("at") {
+                continue;
+            }
+            let qq = seg
+                .get("data")
+                .and_then(|d| d.get("qq"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("all"))
+                .filter(|s| s.chars().all(|c| c.is_ascii_digit()));
+            if let Some(qq) = qq {
+                sensitive_ids.insert(qq.to_string());
+            }
+        }
     }
 
-    // 指令模块未启用 - 不处理指令
-    if !crate::module::is_module_enabled(state, bot_id, "command") {
-        return;
-    }
+    privacy::with_sensitive_ids(sensitive_ids, async {
+        info!(
+            "[{}] 收到消息 ({}) from {}: {}",
+            bot_id,
+            message_type,
+            user_id,
+            raw_message.as_str()
+        );
 
-    // 获取指令前缀
-    let prefix = get_command_prefix(state, bot_id);
-    let command_line = extract_command_line(&event, raw_message, &prefix);
+        let is_admin = is_admin(state, bot_id, user_id);
+        let is_super_admin = is_super_admin(state, bot_id, user_id);
 
-    // 非指令消息 - 直接忽略
-    let command_line = match command_line {
-        Some(line) => line,
-        None => return,
-    };
-    if !command_line.starts_with(&prefix) {
-        return;
-    }
+        // 调用插件 preMessage 钩子（包括白名单过滤等）
+        let pre_msg_ctx = json!({
+            // Keep original type for plugin (number/string), and also provide string forms for safety.
+            "user_id": user_id_raw.clone(),
+            "user_id_str": user_id_str.clone(),
+            "group_id": group_id_raw.clone(),
+            "group_id_str": group_id_str.clone(),
+            "self_id": self_id,
+            "self_id_str": self_id_str,
+            "at_bot": at_bot,
+            "message_type": message_type,
+            "raw_message": raw_message.as_str(),
+            "message_id": event.get("message_id").cloned().unwrap_or(Value::Null),
+            "message": event.get("message").cloned().unwrap_or(Value::Null),
+            "is_admin": is_admin,
+            "is_super_admin": is_super_admin,
+        });
+        let pre_msg_result = state.plugin_manager.pre_message(pre_msg_ctx).await;
 
-    let cmd_text = &command_line[prefix.len()..];
-    let parts: Vec<&str> = cmd_text.split_whitespace().collect();
-    if parts.is_empty() {
-        return;
-    }
+        // 处理插件输出（支持 LLM 回调）
+        process_plugin_outputs_with_source(state, runtime, bot_id, &pre_msg_result.outputs).await;
+
+        if !pre_msg_result.allow && !is_super_admin {
+            info!("[{}] 消息被插件过滤", bot_id);
+            return;
+        }
+
+        // 指令模块未启用 - 不处理指令
+        if !crate::module::is_module_enabled(state, bot_id, "command") {
+            return;
+        }
+
+        // 获取指令前缀
+        let prefix = get_command_prefix(state, bot_id);
+        let command_line = extract_command_line(&event, &raw_message, &prefix);
+
+        // 非指令消息 - 直接忽略
+        let command_line = match command_line {
+            Some(line) => line,
+            None => return,
+        };
+        if !command_line.starts_with(&prefix) {
+            return;
+        }
+
+        let cmd_text = &command_line[prefix.len()..];
+        let parts: Vec<&str> = cmd_text.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
 
         let cmd_name = parts[0];
         let args: Vec<&str> = parts[1..].to_vec();
 
-    // 群聊内如果机器人无法发言，则不执行指令（避免“无响应/浪费资源/报错”）
-    if let Some(gid) = group_id {
-        if matches!(
-            runtime.get_group_send_status(bot_id, gid).await,
-            GroupSendStatus::Muted
-        ) {
-            info!(
-                "[{}] 群 {} 内机器人被禁言，跳过执行指令: {}",
-                bot_id, gid, cmd_name
-            );
-            return;
+        // 群聊内如果机器人无法发言，则不执行指令（避免“无响应/浪费资源/报错”）
+        if let Some(gid) = group_id {
+            if matches!(
+                runtime.get_group_send_status(bot_id, gid).await,
+                GroupSendStatus::Muted
+            ) {
+                info!(
+                    "[{}] 群 {} 内机器人被禁言，跳过执行指令: {}",
+                    bot_id, gid, cmd_name
+                );
+                return;
+            }
         }
-    }
 
         if let Some(command) = find_command(state, cmd_name) {
-        // 检查是否有回复消息，如果有则获取被回复消息的内容
-        let reply_message =
-            reply::get_reply_message_content(runtime, bot_id, group_id, &event).await;
+            // 检查是否有回复消息，如果有则获取被回复消息的内容
+            let reply_message =
+                reply::get_reply_message_content(runtime, bot_id, group_id, &event).await;
 
-        // 调用插件 preCommand 钩子
+            // 调用插件 preCommand 钩子
             let ctx = json!({
                 "user_id": user_id_raw,
                 "user_id_str": user_id_str,
@@ -271,22 +324,23 @@ async fn handle_message(
                 "command_used": cmd_name,
                 "command_is_alias": cmd_name != command.name,
                 "args": args,
-                "raw_message": raw_message,
+                "raw_message": raw_message.as_str(),
                 "message": event.get("message"),
                 "reply_message": reply_message.as_ref(),
                 "is_admin": is_admin,
                 "is_super_admin": is_super_admin,
             });
-        let pre_cmd_result = state.plugin_manager.pre_command(ctx).await;
+            let pre_cmd_result = state.plugin_manager.pre_command(ctx).await;
 
-        // 处理插件输出（支持 LLM 回调）
-        process_plugin_outputs_with_source(state, runtime, bot_id, &pre_cmd_result.outputs).await;
+            // 处理插件输出（支持 LLM 回调）
+            process_plugin_outputs_with_source(state, runtime, bot_id, &pre_cmd_result.outputs)
+                .await;
 
-        if !pre_cmd_result.allow && !is_super_admin {
-            info!("[{}] 指令 {} 被插件阻止", bot_id, command.name);
-            return;
-        }
-        info!("[{}] 执行指令: {}", bot_id, command.name);
+            if !pre_cmd_result.allow && !is_super_admin {
+                info!("[{}] 指令 {} 被插件阻止", bot_id, command.name);
+                return;
+            }
+            info!("[{}] 执行指令: {}", bot_id, command.name);
             execute_command(
                 state,
                 runtime,
@@ -297,13 +351,15 @@ async fn handle_message(
                     group_id,
                     command_used: cmd_name,
                     args: &args,
-                    raw_message: Some(raw_message),
+                    raw_message: Some(raw_message.as_str()),
                     message: event.get("message"),
                     reply_message: reply_message.as_ref(),
                 },
             )
             .await;
         }
+    })
+    .await;
 }
 
 /// 检查是否为管理员
@@ -423,6 +479,19 @@ async fn handle_notice(
     let user_id = parse_u64_field(event.get("user_id")).unwrap_or(0);
     let group_id = parse_u64_field(event.get("group_id"));
     let operator_id = parse_u64_field(event.get("operator_id")).unwrap_or(0);
+    let self_id = runtime.get_self_id(bot_id).await;
+    let self_id_str = self_id.map(|sid| sid.to_string());
+
+    let mut sensitive_ids: HashSet<String> = HashSet::new();
+    if user_id > 0 {
+        sensitive_ids.insert(user_id.to_string());
+    }
+    if operator_id > 0 {
+        sensitive_ids.insert(operator_id.to_string());
+    }
+    if let Some(sid) = self_id {
+        sensitive_ids.insert(sid.to_string());
+    }
 
     let notice_ctx = match notice_type {
         // 灰条消息事件
@@ -436,6 +505,8 @@ async fn handle_notice(
                 "sub_type": sub_type,
                 "user_id": user_id,
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
                 "message_id": message_id,
                 "busi_id": busi_id,
                 "content": content,
@@ -449,6 +520,8 @@ async fn handle_notice(
                 "sub_type": sub_type, // "approve" (管理员同意) 或 "invite" (被邀请)
                 "user_id": user_id,   // 新成员 QQ
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
                 "operator_id": operator_id, // 操作者 QQ（同意入群的管理员或邀请者）
             })
         }
@@ -459,6 +532,8 @@ async fn handle_notice(
                 "sub_type": sub_type, // "leave" (主动退群), "kick" (被踢), "kick_me" (机器人被踢)
                 "user_id": user_id,   // 离开的成员 QQ
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
                 "operator_id": operator_id, // 操作者 QQ（踢人的管理员）
             })
         }
@@ -469,6 +544,8 @@ async fn handle_notice(
                 "sub_type": sub_type, // "set" (设置管理员) 或 "unset" (取消管理员)
                 "user_id": user_id,   // 被操作的成员 QQ
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
             })
         }
         // 群禁言
@@ -479,6 +556,8 @@ async fn handle_notice(
                 "sub_type": sub_type, // "ban" (禁言) 或 "lift_ban" (解除禁言)
                 "user_id": user_id,   // 被禁言的成员 QQ
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
                 "operator_id": operator_id,
                 "duration": duration, // 禁言时长（秒），0 表示解除禁言
             })
@@ -490,15 +569,20 @@ async fn handle_notice(
                 "sub_type": sub_type,
                 "user_id": user_id,
                 "group_id": group_id,
+                "self_id": self_id,
+                "self_id_str": self_id_str,
                 "operator_id": operator_id,
                 "raw_event": event,
             })
         }
     };
 
-    // 调用插件 onNotice 钩子
-    let notice_result = state.plugin_manager.on_notice(notice_ctx).await;
+    privacy::with_sensitive_ids(sensitive_ids, async {
+        // 调用插件 onNotice 钩子
+        let notice_result = state.plugin_manager.on_notice(notice_ctx).await;
 
-    // 处理插件输出（支持 LLM 回调）
-    process_plugin_outputs_with_source(state, runtime, bot_id, &notice_result.outputs).await;
+        // 处理插件输出（支持 LLM 回调）
+        process_plugin_outputs_with_source(state, runtime, bot_id, &notice_result.outputs).await;
+    })
+    .await;
 }

@@ -1,4 +1,5 @@
 use crate::command::CommandRegistry;
+use crate::logs::LogStore;
 use crate::module::ModuleRegistry;
 use crate::plugin::{PluginManager, PluginRegistry};
 use dashmap::DashMap;
@@ -154,6 +155,7 @@ pub struct AppState {
     pub databases: DashMap<String, DatabaseInstance>,
     pub tasks: DashMap<String, BackgroundTask>,
     pub runtime: Arc<RuntimeState>,
+    pub logs: Arc<LogStore>,
     pub plugins: Arc<PluginRegistry>,
     pub plugin_manager: Arc<PluginManager>,
     pub modules: Arc<ModuleRegistry>,

@@ -89,6 +89,10 @@ async fn fetch_qr_image_data_url(client: &reqwest::Client, url: &str) -> Option<
         .trim()
         .to_string();
 
+    if !mime.starts_with("image/") {
+        return None;
+    }
+
     let bytes = resp.bytes().await.ok()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:{mime};base64,{b64}"))
@@ -424,23 +428,28 @@ pub async fn napcat_login_monitor(state: SharedState) {
                                                 }
 
                                                 if should_fetch {
-                                                    // Placeholder: keep `qr_image` non-null so the WebUI
-                                                    // can render immediately; we will replace it with a
-                                                    // base64 data-url once fetched.
-                                                    *state.runtime.latest_qr_image.write().await =
-                                                        Some(qrcode_url.clone());
-
                                                     let qr_image =
                                                         if qrcode_url.starts_with("data:image") {
                                                             Some(qrcode_url.clone())
                                                         } else {
-                                                            fetch_qr_image_data_url(
-                                                                &client,
-                                                                &qrcode_url,
-                                                            )
-                                                            .await
-                                                            .or_else(|| Some(qrcode_url.clone()))
+                                                            let fetched =
+                                                                fetch_qr_image_data_url(
+                                                                    &client,
+                                                                    &qrcode_url,
+                                                                )
+                                                                .await;
+                                                            match fetched {
+                                                                Some(v) => Some(v),
+                                                                None => {
+                                                                    crate::bot::generate_qr_png_data_url(
+                                                                        &qrcode_url,
+                                                                    )
+                                                                }
+                                                            }
                                                         };
+
+                                                    *state.runtime.latest_qr_image.write().await =
+                                                        qr_image.clone();
 
                                                     if let Some(img) = qr_image {
                                                         let current =

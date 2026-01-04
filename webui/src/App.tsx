@@ -18,6 +18,7 @@ import { ToolsPage } from './pages/ToolsPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { RelationsPage } from './pages/RelationsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { LogsPage } from './pages/LogsPage';
 
 export default function App() {
   const { token } = useAuth();
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="/llm" element={<LlmPage />} />
         <Route path="/tools" element={<ToolsPage />} />
         <Route path="/commands" element={<CommandsPage />} />
+        <Route path="/logs" element={<LogsPage />} />
         <Route path="/relations" element={<RelationsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

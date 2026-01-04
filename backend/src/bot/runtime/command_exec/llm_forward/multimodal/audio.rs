@@ -7,7 +7,7 @@ use crate::models::SharedState;
 use super::super::LlmForwardAudioFromUrlInput;
 use super::common::{
     call_chat_completions, download_binary_to_temp, get_record_base64_as_temp, log_llm_error,
-    log_llm_len, read_file_as_data_url, reply_err, resolve_llm_config,
+    log_llm_len, read_file_as_data_url, reply_err, resolve_llm_config_by_name,
     send_llm_markdown_as_forward_image, SendForwardImageInput,
 };
 
@@ -104,7 +104,7 @@ pub(in super::super::super) async fn process_llm_forward_audio_from_url(
         return;
     };
 
-    let llm = match resolve_llm_config(state, bot_id) {
+    let llm = match resolve_llm_config_by_name(state, bot_id, input.model_name) {
         Ok(v) => v,
         Err(e) => {
             reply_err(runtime, bot_id, user_id, group_id, &e).await;

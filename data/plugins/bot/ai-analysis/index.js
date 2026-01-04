@@ -30,6 +30,7 @@ return {
     const gid = group_id || 0;
 
     const config = nbot.getConfig();
+    const analysisModel = String(config.analysis_model || "").trim() || "default";
     const systemPrompt = config.system_prompt || "你是一个专业的分析助手，擅长分析各种文件和内容。请用中文回复，分析要详细、有条理。";
     const defaultPrompt = config.default_prompt || "请分析以下内容";
     const maxLength = config.max_content_length || 50000;
@@ -66,6 +67,17 @@ return {
     }
 
     const prompt = defaultPrompt;
+    const llmOptions = {
+      modelName: analysisModel,
+      timeout_ms: 30000,
+      image_max_bytes: maxImageBytes,
+      image_max_width: imageMaxWidth,
+      image_max_height: imageMaxHeight,
+      image_jpeg_quality: imageJpegQuality,
+      image_max_output_bytes: imageMaxOutputBytes,
+      video_max_bytes: maxVideoBytes,
+      audio_max_bytes: maxAudioBytes,
+    };
 
       // 图片：多模态分析
       if (reply_message.image_url) {
@@ -87,7 +99,8 @@ return {
           imageMaxWidth,
           imageMaxHeight,
           imageJpegQuality,
-          imageMaxOutputBytes
+          imageMaxOutputBytes,
+          { modelName: analysisModel }
         );
         return;
       }
@@ -118,7 +131,8 @@ return {
           videoTranscriptionModel,
           videoMaxAudioSeconds,
           videoRequireTranscript,
-          videoInputMode
+          videoInputMode,
+          { modelName: analysisModel }
         );
         return;
       }
@@ -142,7 +156,8 @@ return {
           maxAudioBytes,
           audioMaxAudioSeconds,
           audioRequireTranscript,
-          reply_message.record_file || ""
+          reply_message.record_file || "",
+          { modelName: analysisModel }
         );
         return;
       }
@@ -167,7 +182,8 @@ return {
           fileName,
           30000,
           maxBytes,
-          maxChars
+          maxChars,
+          { modelName: analysisModel }
         );
         return;
       }
@@ -191,44 +207,26 @@ return {
           nbot.sendReply(user_id, gid, `内容过长，已截取前 ${maxLength} 字符进行分析`);
         }
 
-        if (forwardMedia.length > 0) {
-          if (showProcessing) {
-            nbot.sendReply(user_id, gid, `正在分析 合并转发消息（含 ${forwardMedia.length} 个附件），请稍候...`);
-          }
-
-          nbot.callLlmForwardMediaBundle(
+        if (showProcessing) {
+          nbot.sendReply(
             user_id,
             gid,
-            systemPrompt,
-            prompt,
-            "合并转发消息",
-            content,
-            forwardMedia,
-            {
-              timeout_ms: 30000,
-              image_max_bytes: maxImageBytes,
-              image_max_width: imageMaxWidth,
-              image_max_height: imageMaxHeight,
-              image_jpeg_quality: imageJpegQuality,
-              image_max_output_bytes: imageMaxOutputBytes,
-              video_max_bytes: maxVideoBytes,
-              audio_max_bytes: maxAudioBytes,
-            }
-          );
-        } else {
-          if (showProcessing) {
-            nbot.sendReply(user_id, gid, "正在分析 合并转发消息，请稍候...");
-          }
-
-          nbot.callLlmForward(
-            user_id,
-            gid,
-            systemPrompt,
-            prompt,
-            content,
-            "合并转发消息"
+            forwardMedia.length > 0
+              ? `正在分析 合并转发消息（含 ${forwardMedia.length} 个附件），请稍候...`
+              : "正在分析 合并转发消息，请稍候..."
           );
         }
+
+        nbot.callLlmForwardMediaBundle(
+          user_id,
+          gid,
+          systemPrompt,
+          prompt,
+          "合并转发消息",
+          content,
+          forwardMedia,
+          llmOptions
+        );
         return;
       }
 
@@ -244,13 +242,15 @@ return {
           nbot.sendReply(user_id, gid, `内容过长，已截取前 ${maxLength} 字符进行分析`);
         }
 
-        nbot.callLlmForward(
+        nbot.callLlmForwardMediaBundle(
           user_id,
           gid,
           systemPrompt,
           prompt,
+          "消息内容",
           content,
-          "消息内容"
+          [],
+          llmOptions
         );
         return;
       }

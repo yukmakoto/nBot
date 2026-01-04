@@ -4,6 +4,7 @@ mod command;
 mod container;
 mod database;
 mod http;
+mod logs;
 mod models;
 mod module;
 mod persistence;
@@ -25,6 +26,7 @@ use tokio::sync::RwLock;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::{error, info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::auth::{load_or_create_api_token, require_api_token, AuthState};
 use crate::bot::{
@@ -39,7 +41,11 @@ use crate::plugin::{PluginManager, PluginRegistry};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let logs = Arc::new(logs::LogStore::new(5000));
+    let writer = logs::TeeMakeWriter::new(logs.clone());
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(false))
+        .init();
     info!("启动 nBot 后端...");
 
     // Load persisted state
@@ -86,6 +92,7 @@ async fn main() {
             latest_qr: RwLock::new(None),
             latest_qr_image: RwLock::new(None),
         }),
+        logs: logs.clone(),
         plugins: plugins.clone(),
         plugin_manager: plugin_manager.clone(),
         modules,
@@ -259,6 +266,7 @@ async fn main() {
         .route("/status", get(bot::get_status_handler))
         .route("/system/stats", get(bot::get_system_stats_handler))
         .route("/system/info", get(bot::get_system_info_handler))
+        .route("/system/logs", get(bot::get_system_logs_handler))
         .route("/system/export", get(bot::system_export_handler))
         .route("/docker/info", get(bot::get_docker_info_handler))
         .route("/message/stats", get(bot::get_message_stats_handler))
