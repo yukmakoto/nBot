@@ -1,0 +1,114 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  /* ACG Pink Cute Palette - Synced with Tailwind */
+  --color-brand: #FF8BA7;
+  --color-brand-hover: #FF5E8E;
+  --color-brand-soft: #FFF5F7;
+  --color-accent: #81D4FA;
+
+  --color-text-main: #5D4037;
+  --color-text-muted: #A1887F;
+
+  --color-bg-body: #FFF5F7;
+  --color-bg-card: #FFFFFF;
+  --color-bg-sidebar: rgba(255, 255, 255, 0.85);
+
+  /* Centralized Motion Tokens */
+  --duration-fast: 200ms;
+  --duration-normal: 400ms;
+  --duration-slow: 700ms;
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Centralized Shadow Tokens */
+  --shadow-soft: 0 4px 15px rgba(255, 139, 167, 0.1);
+  --shadow-medium: 0 8px 25px rgba(255, 139, 167, 0.15);
+  --shadow-heavy: 0 20px 40px -12px rgba(99, 102, 241, 0.12);
+  --shadow-card: 0 4px 0px var(--color-brand-soft);
+
+  /* Standardized Border Radius */
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+
+  /* Standardized Blur */
+  --blur-modal: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg-body);
+  font-family: var(--font-family-base, 'Outfit', 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  color: var(--color-text-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Standardized Buttons */
+.btn-primary {
+  @apply px-6 py-3 bg-brand text-white rounded-2xl font-black text-xs hover:bg-brand-hover transition-all shadow-lg shadow-brand/20 uppercase tracking-widest active:scale-95;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 bg-white text-text-main border border-brand/10 rounded-xl font-bold text-xs hover:bg-brand-soft transition-all shadow-sm active:scale-95;
+}
+
+.btn-ghost {
+  @apply px-6 py-3 text-brand/50 hover:text-brand hover:bg-brand-soft rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95;
+}
+
+.btn-danger-solid {
+  @apply px-6 py-3 bg-red-500 text-white rounded-2xl font-black text-xs hover:bg-red-600 transition-all shadow-lg shadow-red-100 uppercase tracking-widest active:scale-95;
+}
+
+.btn-danger-ghost {
+  @apply px-4 py-2 text-red-400 hover:text-red-500 hover:bg-red-50 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95;
+}
+
+/* Cards */
+.card-md {
+  @apply bg-white border border-brand-soft transition-all rounded-3xl p-6 shadow-sm;
+}
+
+.card-elevated {
+  @apply hover:shadow-xl hover:-translate-y-1;
+}
+
+/* Modals */
+.modal-backdrop {
+  @apply fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4;
+  backdrop-filter: blur(var(--blur-modal));
+}
+
+.modal-container {
+  @apply bg-white rounded-[32px] shadow-2xl w-full overflow-hidden;
+}
+
+.clean-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.clean-scroll::-webkit-scrollbar-track {
+  background-color: transparent;
+  border-radius: 3px;
+}
+
+.clean-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 182, 193, 0.4);
+  border-radius: 3px;
+  transition: all 0.3s;
+}
+
+.clean-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 127, 172, 0.6);
+}

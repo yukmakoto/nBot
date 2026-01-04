@@ -1,0 +1,48 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# Node / Frontend
+node_modules/
+.npm/
+frontend/public/tailwind.css
+frontend/full_error.txt
+
+# Build outputs
+/dist/
+/frontend/dist/
+
+# Published-only repos (kept separately)
+homepage/
+
+# Local backups / scratch
+_backup/
+
+# Runtime data (local only)
+data/state/
+data/bots/
+data/plugins/storage/
+data/keys/
+data/modules.json
+napcat/
+
+# Local run outputs (when running from crate dir)
+backend/data/
+backend/dist/
+
+# Market server (private, not open-sourced)
+market-server/
+
+# Logs
+*.log
+
+# OS / IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.env
+.env.*
+!.env.example
+Thumbs.db

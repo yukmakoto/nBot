@@ -1,0 +1,30 @@
+**/target
+**/node_modules
+**/.git
+**/.DS_Store
+**/*.log
+.env
+.env.*
+!.env.example
+
+# Runtime data (often large / sensitive)
+data/state
+data/state/**
+data/bots
+data/bots/**
+data/plugins/storage
+data/plugins/storage/**
+data/keys
+data/keys/**
+data/modules.json
+backend/data
+market-server/data
+napcat
+
+# Frontend build artifacts
+frontend/dist
+frontend/full_error.txt
+
+# Local backups / scratch
+_backup
+_backup/**

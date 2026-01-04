@@ -1,0 +1,52 @@
+services:
+  # The Main Bot Logic (WebUI + Backend)
+  bot:
+    build:
+      context: .
+      target: bot-runtime
+    ports:
+      - "${NBOT_WEBUI_HOST:-127.0.0.1}:${NBOT_WEBUI_PORT:-32100}:32100"
+    depends_on:
+      - wkhtmltoimage
+    environment:
+      - RUST_LOG=info
+      - WKHTMLTOIMAGE_URL=http://wkhtmltoimage:8080
+      # 国内环境建议使用国内 CDN（避免 jsdelivr 受限导致渲染失败）
+      - NBOT_TWEMOJI_BASE_URL=https://cdn.staticfile.org/twemoji/14.0.2/svg/
+      - NBOT_NAPCAT_IMAGE=${NBOT_NAPCAT_IMAGE:-docker.nailed.dev/mlikiowa/napcat-docker:latest}
+      - NBOT_WEBUI_HOST=${NBOT_WEBUI_HOST:-127.0.0.1}
+      - NBOT_WEBUI_PORT=${NBOT_WEBUI_PORT:-32100}
+      - NBOT_RENDER_HOST=${NBOT_RENDER_HOST:-127.0.0.1}
+      - NBOT_RENDER_PORT=${NBOT_RENDER_PORT:-32180}
+      - NBOT_DOCKER_MODE=true
+      - PROJECT_ROOT=/compose
+      - COMPOSE_PROJECT_NAME=nbot
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/compose:ro
+    networks:
+      - nbot_default
+
+  # wkhtmltoimage Renderer (Tool Container)
+  wkhtmltoimage:
+    build:
+      context: .
+      target: render-runtime
+    restart: unless-stopped
+    ports:
+      - "${NBOT_RENDER_HOST:-127.0.0.1}:${NBOT_RENDER_PORT:-32180}:8080"
+    environment:
+      - RUST_LOG=info
+      - PORT=8080
+    networks:
+      - nbot_default
+    labels:
+      - "nbot.infra=true"
+      - "nbot.infra.name=wkhtmltoimage"
+      - "nbot.infra.description=HTML 转图片服务"
+
+networks:
+  nbot_default:
+    name: nbot_default
+    driver: bridge

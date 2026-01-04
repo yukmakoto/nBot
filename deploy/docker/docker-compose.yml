@@ -1,0 +1,51 @@
+services:
+  bot:
+    image: ${NBOT_DOCKER_REGISTRY:-docker.nailed.dev}/${NBOT_DOCKERHUB_NAMESPACE:-yukmakoto}/nbot-bot:${NBOT_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${NBOT_WEBUI_BIND_HOST:-0.0.0.0}:${NBOT_WEBUI_PORT:-32100}:32100"
+    depends_on:
+      - wkhtmltoimage
+    environment:
+      - RUST_LOG=info
+      - WKHTMLTOIMAGE_URL=http://wkhtmltoimage:8080
+      - NBOT_TWEMOJI_BASE_URL=${NBOT_TWEMOJI_BASE_URL:-https://cdn.staticfile.org/twemoji/14.0.2/svg/}
+      - NBOT_DOCKERHUB_NAMESPACE=${NBOT_DOCKERHUB_NAMESPACE:-yukmakoto}
+      - NBOT_DOCKER_REGISTRY=${NBOT_DOCKER_REGISTRY:-docker.nailed.dev}
+      - NBOT_TAG=${NBOT_TAG:-latest}
+      - NBOT_NAPCAT_IMAGE=${NBOT_NAPCAT_IMAGE:-docker.nailed.dev/yukmakoto/napcat-docker:latest}
+      - NBOT_API_TOKEN=${NBOT_API_TOKEN}
+      - NBOT_DOCKER_MODE=true
+      - DOCKER_CONFIG=/docker-config
+      - PROJECT_ROOT=/compose
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-nbot}
+    volumes:
+      - nbot_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/compose:ro
+      - ./docker-config:/docker-config:ro
+    networks:
+      - nbot_default
+
+  wkhtmltoimage:
+    image: ${NBOT_DOCKER_REGISTRY:-docker.nailed.dev}/${NBOT_DOCKERHUB_NAMESPACE:-yukmakoto}/nbot-render:${NBOT_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${NBOT_RENDER_BIND_HOST:-127.0.0.1}:${NBOT_RENDER_PORT:-32180}:8080"
+    environment:
+      - RUST_LOG=info
+      - PORT=8080
+    networks:
+      - nbot_default
+    labels:
+      - "nbot.infra=true"
+      - "nbot.infra.name=wkhtmltoimage"
+      - "nbot.infra.description=HTML 转图片服务"
+
+volumes:
+  nbot_data:
+
+networks:
+  nbot_default:
+    name: nbot_default
+    driver: bridge

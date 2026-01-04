@@ -1,0 +1,264 @@
+name: Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (check/test)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check
+        run: cargo check --workspace
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+  web:
+    name: Build WebUI (dist)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install deps & build WebUI
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+
+  native:
+    name: Build Native Binaries (${{ matrix.name }})
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: web
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            artifact: nbot-windows-x86_64.zip
+          - name: linux-x86_64
+            os: ubuntu-latest
+            artifact: nbot-linux-x86_64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: System deps (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build backend + renderd (release)
+        run: |
+          cargo build --release -p backend --bin backend
+          cargo build --release -p backend --bin renderd
+          cargo build --release -p backend --bin nbotctl
+
+      - name: Package (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: powershell
+        run: |
+          $pkg = "package"
+          Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $pkg | Out-Null
+
+          # Bundle runtime tools so Windows users don't need to install extra dependencies manually.
+          winget source update --disable-interactivity *> $null
+          winget install -e --id wkhtmltopdf.wkhtmltox --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+          winget install -e --id Gyan.FFmpeg --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+
+          # Refresh PATH after winget installs (winget modifies PATH but current session doesn't see it)
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+          $wkPath1 = Join-Path (Join-Path $Env:ProgramFiles "wkhtmltopdf") "bin"
+          $wkPath2 = Join-Path (Join-Path ${Env:ProgramFiles(x86)} "wkhtmltopdf") "bin"
+          $wkDirs = @(@($wkPath1, $wkPath2) | Where-Object { $_ -and (Test-Path (Join-Path $_ "wkhtmltoimage.exe")) })
+          if (-not $wkDirs -or $wkDirs.Count -lt 1) { throw "wkhtmltoimage.exe not found after installing wkhtmltox" }
+          $wkDir = $wkDirs[0]
+          Write-Host "wkDir: $wkDir"
+
+          $ffmpegPath = (Get-Command "ffmpeg" -ErrorAction Stop).Source
+          $ffDir = Split-Path -Parent $ffmpegPath
+
+          Copy-Item -Path "target/release/backend.exe" -Destination "$pkg/backend.exe" -Force
+          Copy-Item -Path "target/release/renderd.exe" -Destination "$pkg/renderd.exe" -Force
+          Copy-Item -Path "target/release/nbotctl.exe" -Destination "$pkg/nbotctl.exe" -Force
+          Copy-Item -Path "LICENSE" -Destination "$pkg/LICENSE" -Force
+          Copy-Item -Path "dist" -Destination "$pkg/dist" -Recurse -Force
+          Copy-Item -Path "assets" -Destination "$pkg/assets" -Recurse -Force
+          Copy-Item -Path "data" -Destination "$pkg/data" -Recurse -Force
+          Copy-Item -Path "scripts/bundle/windows/start.ps1" -Destination "$pkg/start.ps1" -Force
+          Copy-Item -Path "scripts/bundle/windows/start.bat" -Destination "$pkg/start.bat" -Force
+
+          New-Item -ItemType Directory -Force "$pkg/tools/wkhtmltox/bin" | Out-Null
+          Push-Location $wkDir
+          Get-ChildItem | Copy-Item -Destination "$env:GITHUB_WORKSPACE/$pkg/tools/wkhtmltox/bin" -Recurse -Force
+          Pop-Location
+          New-Item -ItemType Directory -Force "$pkg/tools/ffmpeg/bin" | Out-Null
+          Copy-Item -Path $ffmpegPath -Destination "$pkg/tools/ffmpeg/bin/ffmpeg.exe" -Force
+          $ffprobePath = Join-Path $ffDir "ffprobe.exe"
+          if (Test-Path $ffprobePath) {
+            Copy-Item -Path $ffprobePath -Destination "$pkg/tools/ffmpeg/bin/ffprobe.exe" -Force
+          }
+
+          New-Item -ItemType Directory -Force "$pkg/data/state" | Out-Null
+          Copy-Item -Path ".env.example" -Destination "$pkg/.env.example" -Force
+
+          Compress-Archive -Path "$pkg/*" -DestinationPath "${{ matrix.artifact }}" -Force
+
+      - name: Package (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          rm -rf package
+          mkdir -p package
+
+          cp target/release/backend package/backend
+          cp target/release/renderd package/renderd
+          cp target/release/nbotctl package/nbotctl
+          cp LICENSE package/LICENSE
+          cp -R dist package/dist
+          cp -R assets package/assets
+          cp -R data package/data
+          mkdir -p package/data/state
+          cp .env.example package/.env.example
+
+          tar -czf "${{ matrix.artifact }}" -C package .
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  dockerhub:
+    name: Build & Push (Docker Hub)
+    needs: [web, rust]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker push disabled (missing secrets)
+        if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '') }}
+        shell: bash
+        run: |
+          echo "DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set; will build only (no push)."
+
+      - name: Login to Docker Hub
+        if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Meta (bot)
+        id: meta_bot
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_USERNAME || 'local' }}/nbot-bot
+          tags: |
+            type=ref,event=tag
+            type=sha
+            type=raw,value=latest
+
+      - name: Build & Push (bot)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: bot-runtime
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+          provenance: false
+          tags: ${{ steps.meta_bot.outputs.tags }}
+          labels: ${{ steps.meta_bot.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Meta (render)
+        id: meta_render
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_USERNAME || 'local' }}/nbot-render
+          tags: |
+            type=ref,event=tag
+            type=sha
+            type=raw,value=latest
+
+      - name: Build & Push (render)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: render-runtime
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+          provenance: false
+          tags: ${{ steps.meta_render.outputs.tags }}
+          labels: ${{ steps.meta_render.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

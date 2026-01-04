@@ -1,0 +1,28 @@
+[
+  {
+    "id": "help",
+    "name": "帮助",
+    "aliases": [
+      "help",
+      "菜单"
+    ],
+    "pattern": null,
+    "description": "显示帮助信息，列出所有可用指令",
+    "is_builtin": true,
+    "action": "Help",
+    "subcommands": [],
+    "params": [
+      {
+        "name": "command",
+        "description": "查看指定指令的详细帮助",
+        "required": false,
+        "param_type": "string"
+      }
+    ],
+    "category": "核心功能",
+    "config": {
+      "background_url": "",
+      "mode": "image"
+    }
+  }
+]

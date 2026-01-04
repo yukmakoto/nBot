@@ -1,0 +1,59 @@
+[package]
+name = "backend"
+version = "0.0.1"
+license = "GPL-3.0-only"
+edition = "2021"
+default-run = "backend"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+axum = { version = "0.7.5", features = ["ws"] }
+tokio = { version = "1.38", features = ["full"] }
+tower-http = { version = "0.5.2", features = ["fs", "trace", "cors", "set-header"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio-tungstenite = "0.21.0"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dashmap = "5.5"
+tower = { version = "0.4", features = ["util"] }
+strip-ansi-escapes = "0.2"
+base64 = "0.22"
+rand = "0.9"
+
+# Plugin system
+deno_core = "0.311"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+sha2 = "0.10"
+tar = "0.4"
+flate2 = "1.0"
+async-trait = "0.1"
+rand_core = "0.6"
+
+# HTTP client for market / LLM (multipart used for audio transcription)
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+
+# Time formatting
+chrono = "0.4"
+
+# System info
+sysinfo = "0.32"
+rustc_version_runtime = "0.3"
+
+# Emoji detection (Unicode standard)
+unic-emoji-char = "0.9"
+
+# Lazy static
+once_cell = "1.19"
+
+# Markdown + code highlighting (AI analysis rendering)
+comrak = { version = "0.24", features = ["syntect"] }
+
+# Image decoding/resizing (multimodal inputs)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
