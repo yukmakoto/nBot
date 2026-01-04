@@ -991,6 +991,7 @@ ensure_docker_installed
 ensure_docker_running
 ensure_docker_compose
 ensure_cli_tools
+ensure_ffmpeg
 
 compose_down
 
