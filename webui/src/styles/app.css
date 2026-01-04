@@ -85,7 +85,7 @@ body {
 
 /* Modals */
 .modal-backdrop {
-  @apply fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4;
+  @apply fixed inset-0 bg-black/40 flex items-start justify-center z-50 p-4 overflow-y-auto;
   backdrop-filter: blur(var(--blur-modal));
 }
 

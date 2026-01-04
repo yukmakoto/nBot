@@ -69,9 +69,18 @@ export function InstancesPage() {
   async function triggerLogin(bot: BotInstance) {
     try {
       const resp = await api.post(`/bots/${encodeURIComponent(bot.id)}/login`);
+      const status = resp.data?.status as string | undefined;
+      const message = resp.data?.message as string | undefined;
+      if (status === 'error') {
+        toast.error(message ?? '触发登录失败');
+        return;
+      }
+
       const qr = resp.data?.qr as string | null | undefined;
+      const qrImage = resp.data?.qr_image as string | null | undefined;
       if (qr) {
         toast.success('已获取登录二维码，请扫码登录');
+        queryClient.setQueryData(['napcat-qr'], { qr, qr_image: qrImage ?? null });
       } else {
         toast('已触发登录：请稍候等待二维码更新');
       }
