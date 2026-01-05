@@ -66,6 +66,7 @@ function getConfig() {
       "- 只要像玩笑/吐槽/阴阳怪气/反讽/自问自答/口头禅、或没有明确问题与需求，一律判定 NO。",
       "- 被 @ 机器人只是“优先级更高”的信号，仍然可以判定 NO。",
       "- 没有 @ 机器人时：除非用户明显是在向全群求助/提问（期待任何人回答），否则一律判定 NO。不要抢别人的对话。",
+      "- 如果【最近群聊片段】里已经有人给出明确答案/解决步骤/指路（例如“群文件/看公告/看置顶/去某某页面”），通常判定 NO（机器人不要抢答/复读）。",
       "- 只有媒体/占位符（如“[图片] / [视频] / [语音] / [卡片]”）且没有任何文字内容，一律判定 NO（不要去‘说明无法判断’）。",
       "- 只有表情/颜文字/一个词/无意义应答（如“哈哈”“？”“。。。”）一律判定 NO。",
       "- 用户在 @ 其他人（而不是 @ 机器人）时，通常是在找那个人说话：除非明确要求机器人回答，否则判定 NO。",
@@ -92,6 +93,10 @@ function getConfig() {
       "- 最多问 1 个关键追问；否则直接给一个最可能有效的下一步。",
       "- 禁止笼统套话（如“各有优缺点/取决于情况/看需求/因人而异”）。不确定就问 1 个能推进问题的关键点。",
       "- 禁止编造任何未在上文出现的事实（例如版本/整合包/服务器细节/群内信息）。不确定就问一句。",
+      "- 不要复述/引用聊天记录内容（不要“某某: xxx”这种复读）；直接给结论或下一步。",
+      "- 如果群里已经有人给出答案/指路，你最多补充一个更精确的关键字/入口；否则就别插嘴。",
+      "- 允许提供公开/官方/开源的下载入口或检索关键字；不要输出盗版/破解/私服资源。遇到缩写歧义（例如 PCL 可能指点云库也可能指 MC 启动器）先问一句确认。",
+      "- 群表情/颜文字一般不需要回应；不要说“无法理解表情”。",
       "- 不要输出任何 QQ 号/ID/Token/密钥；@ 由系统自动添加，你不要手写 @。",
     ].join("\n");
 
@@ -895,9 +900,12 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
   }
   const contextInfo = buildReplyContextForPrompt(session.groupContext, session.userId);
   const lastUserMsg = session.messages.slice().reverse().find((m) => m && m.role === "user")?.content || "";
+  const groupSnippetCount = looksReferentialShortQuestion(lastUserMsg)
+    ? config.contextMessageCount
+    : 12;
   const groupSnippet =
-    session.groupContext && looksReferentialShortQuestion(lastUserMsg)
-      ? buildRecentGroupSnippet(session.groupContext, config.contextMessageCount)
+    session.groupContext && session.turnCount === 0
+      ? buildRecentGroupSnippet(session.groupContext, groupSnippetCount)
       : "";
   if (contextInfo && session.turnCount === 0) {
     messages.push({
@@ -905,7 +913,7 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
       content: `以下是该用户在本群最近发言的原文（截断），仅用于理解语境；禁止推断任何未出现的事实，也不要输出任何 QQ 号/ID：\n\n${contextInfo}`,
     });
   }
-  if (groupSnippet && session.turnCount === 0) {
+  if (groupSnippet) {
     messages.push({
       role: "system",
       content:

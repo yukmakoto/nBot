@@ -1,7 +1,7 @@
 use deno_core::{extension, JsRuntime, RuntimeOptions};
 use std::path::PathBuf;
 use std::rc::Rc;
-use tracing::info;
+use tracing::debug;
 
 mod ops;
 mod state;
@@ -143,7 +143,7 @@ impl PluginRuntime {
             .await
             .map_err(|e| format!("onEnable event loop failed: {}", e))?;
 
-        info!("插件 {} 已加载", self.plugin_id);
+        debug!("插件 {} 已加载", self.plugin_id);
         Ok(())
     }
 

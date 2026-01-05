@@ -417,7 +417,10 @@ function PluginConfigModal({
 
   return (
     <div className="modal-backdrop" onClick={() => (!busy ? onClose() : null)}>
-      <div className="modal-container max-w-3xl" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-container max-w-3xl flex flex-col max-h-[calc(100vh-2rem)]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="bg-brand-soft/50 px-8 py-6 border-b border-brand/10 flex items-center justify-between">
           <div className="min-w-0">
             <div className="text-xl font-black text-text-main truncate">{plugin.manifest.name}</div>
@@ -435,7 +438,7 @@ function PluginConfigModal({
           </button>
         </div>
 
-        <div className="p-8 space-y-6">
+        <div className="p-8 space-y-6 overflow-y-auto clean-scroll flex-1">
           {hasSchema ? (
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
