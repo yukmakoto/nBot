@@ -560,7 +560,7 @@ pub(super) async fn process_plugin_outputs_with_llm_response(
                             let _ = inline_multimodal_media_in_messages(
                                 &mut prepared_messages,
                                 30_000,
-                                50_000_000,
+                                15_000_000,
                                 1024,
                                 1024,
                                 80,
@@ -632,7 +632,7 @@ pub(super) async fn process_plugin_outputs_with_llm_response(
                             let _ = inline_multimodal_media_in_messages(
                                 &mut prepared_messages,
                                 30_000,
-                                50_000_000,
+                                15_000_000,
                                 1024,
                                 1024,
                                 80,

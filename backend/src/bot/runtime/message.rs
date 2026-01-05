@@ -269,6 +269,9 @@ async fn handle_message(
         let is_admin = is_admin(state, bot_id, user_id);
         let is_super_admin = is_super_admin(state, bot_id, user_id);
 
+        // If the message is replying to another message, fetch the replied content so plugins can use it.
+        let reply_message = reply::get_reply_message_content(runtime, bot_id, group_id, &event).await;
+
         // 调用插件 preMessage 钩子（包括白名单过滤等）
         let pre_msg_ctx = json!({
             // Keep original type for plugin (number/string), and also provide string forms for safety.
@@ -283,6 +286,7 @@ async fn handle_message(
             "raw_message": raw_message.as_str(),
             "message_id": event.get("message_id").cloned().unwrap_or(Value::Null),
             "message": event.get("message").cloned().unwrap_or(Value::Null),
+            "reply_message": reply_message.as_ref(),
             "is_admin": is_admin,
             "is_super_admin": is_super_admin,
         });

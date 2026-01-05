@@ -1,15 +1,13 @@
 /**
- * nBot Smart Assistant Plugin v2.2.19
+ * nBot Smart Assistant Plugin v2.2.21
  * Auto-detects if user needs help, enters multi-turn conversation mode,
- * supports web search, generates analysis report via forward message
+ * replies in a QQ-friendly style (single-line, low-noise)
  *
  * Features:
  * 1. Decision model: Monitors each message, strictly judges if user needs help
  * 2. Multi-turn conversation: After entering conversation mode, interacts with user
- * 3. Interrupt conversation: User can interrupt at any time (no report generated)
- * 4. Early analysis: User can request early report generation
- * 5. Web search: Can enable web search when generating report
- * 6. Forward message: Final report sent via merged forward message
+ * 3. Interrupt conversation: User can interrupt at any time
+ * 4. Group context: Fetches group announcements and user history for better decisions
  * 7. Group context: Fetches group announcements and user history for better decisions
  * 8. Auto-timeout: Sessions auto-cleanup with notification
  * 9. Cooldown from cleanup: Cooldown starts from session cleanup, not trigger
@@ -31,7 +29,6 @@ const pendingGroupInfoRequests = new Map();
 const pendingDecisionSessions = new Set();
 const pendingContextSessions = new Set();
 const pendingReplySessions = new Set();
-const pendingReportSessions = new Set();
 
 // Decision batching (reduce LLM calls while still judging every message)
 const decisionBatches = new Map(); // Map<sessionKey, { userId:number, groupId:number, items: {t:number,text:string,mentioned:boolean}[] }>
@@ -60,11 +57,6 @@ function getConfig() {
     Array.isArray(cfg.interrupt_keywords) && cfg.interrupt_keywords.length
       ? cfg.interrupt_keywords
       : ["我明白了", "结束", "停止"];
-  const earlyAnalysisKeywords =
-    Array.isArray(cfg.early_analysis_keywords) && cfg.early_analysis_keywords.length
-      ? cfg.early_analysis_keywords
-      : ["这就是我想说的", "生成报告", "总结"];
-
   const decisionSystemPrompt =
     cfg.decision_system_prompt ||
     [
@@ -79,8 +71,9 @@ function getConfig() {
       "- 用户在 @ 其他人（而不是 @ 机器人）时，通常是在找那个人说话：除非明确要求机器人回答，否则判定 NO。",
       "",
       "请输出严格 JSON（不要 Markdown、不要解释文本）：",
-      '{"decision":"YES|NO","confidence":0.0,"reason":"<=20字中文"}',
+      '{"decision":"YES|NO","confidence":0.0,"reason":"<=20字中文","use_search":true|false}',
       "输出必须为【单行 JSON】，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符。",
+      "use_search 说明：只有当需要查询公开资料/最新信息/外部知识时才为 true；纯群内问题/本地报错排查/需要对方补充信息时为 false。",
       "",
       "decision=YES 的条件（同时满足）：",
       "1) 明确在求助/提问/请求排查/要方案/要解释；且",
@@ -97,23 +90,11 @@ function getConfig() {
       "- 只输出【一行】中文短句；禁止换行；禁止 Markdown/列表/编号/加粗/代码块。",
       "- 语气自然像群友：别写长段落、别客服腔、别“为了更好地帮助你…”。",
       "- 最多问 1 个关键追问；否则直接给一个最可能有效的下一步。",
+      "- 禁止笼统套话（如“各有优缺点/取决于情况/看需求/因人而异”）。不确定就问 1 个能推进问题的关键点。",
       "- 禁止编造任何未在上文出现的事实（例如版本/整合包/服务器细节/群内信息）。不确定就问一句。",
       "- 不要输出任何 QQ 号/ID/Token/密钥；@ 由系统自动添加，你不要手写 @。",
     ].join("\n");
 
-  const reportPrompt =
-    cfg.report_prompt ||
-    [
-      "请基于以上对话生成一份「分析报告」，并严格按以下格式输出两部分：",
-      "",
-      "===MARKDOWN===",
-      "（这部分用 Markdown 写，适合渲染成图片；结构清晰，包含：问题概述、关键信息、分析、排查步骤、解决方案、后续建议）",
-      "",
-      "===COPY===",
-      "（这部分给用户“方便复制”的纯文本内容：只保留最终可执行的步骤/命令/配置片段/关键链接；不要写长篇解释）",
-      "",
-      "要求：中文；不要输出除以上分隔符与内容外的任何额外文字。",
-    ].join("\n");
   return {
     decisionModel: cfg.decision_model || "default",
     replyModel: cfg.reply_model || "default",
@@ -132,12 +113,7 @@ function getConfig() {
     })(),
     decisionSystemPrompt,
     replySystemPrompt,
-    reportPrompt,
     interruptKeywords,
-    earlyAnalysisKeywords,
-    greetingTemplate:
-      cfg.greeting_template ||
-      "你好，我注意到你可能需要帮助。\n\n剩余对话次数：{remaining}\n\n请在对话次数内向我描述清楚你的问题。\n\n如果你已经明白了，可以回复「我明白了」来结束对话。\n如果你已经说完了，可以回复「这就是我想说的」来提前生成分析报告。",
     botName: cfg.bot_name || "智能助手",
     fetchGroupContext: cfg.fetch_group_context !== false,
     contextMessageCount: (() => {
@@ -287,6 +263,51 @@ function extractRecordUrlsFromCtx(ctx) {
   }
 
   return [...new Set(urls)].filter((u) => /^https?:\/\//i.test(String(u || ""))).slice(0, 2);
+}
+
+function extractReplyMessageContext(ctx) {
+  const rm = ctx && ctx.reply_message ? ctx.reply_message : null;
+  if (!rm) return null;
+
+  const raw = String(rm.raw_message || "");
+  const text = sanitizeMessageForLlm(raw, null);
+  const snippet = text.length > 240 ? `${text.slice(0, 240)}…` : text;
+
+  const imageUrls = [];
+  const videoUrls = [];
+  const recordUrls = [];
+  const addTo = (arr, u) => {
+    const s = String(u || "").trim();
+    if (!s) return;
+    if (!/^https?:\/\//i.test(s)) return;
+    const decoded = decodeHtmlEntities(s);
+    if (!arr.includes(decoded)) arr.push(decoded);
+  };
+
+  // Prefer media attachments from the replied message.
+  addTo(imageUrls, rm.image_url);
+  addTo(videoUrls, rm.video_url);
+  addTo(recordUrls, rm.record_url);
+
+  // If the replied message is a forward, it may contain multiple media items.
+  const fm = rm.forward_media;
+  if (Array.isArray(fm)) {
+    for (const item of fm) {
+      if (!item) continue;
+      const t = String(item.type || "").toLowerCase();
+      if (t === "video") addTo(videoUrls, item.url);
+      else if (t === "record" || t === "audio") addTo(recordUrls, item.url);
+      else addTo(imageUrls, item.url);
+      if (imageUrls.length + videoUrls.length + recordUrls.length >= 3) break;
+    }
+  }
+
+  return {
+    snippet,
+    imageUrls: imageUrls.slice(0, 2),
+    videoUrls: videoUrls.slice(0, 1),
+    recordUrls: recordUrls.slice(0, 1),
+  };
 }
 
 function noteRecentGroupImages(groupId, urls) {
@@ -481,6 +502,11 @@ function sanitizeMessageForLlm(text, ctx) {
       return "@他人";
     })
     .replace(/\[CQ:reply,[^\]]*\]/g, " ")
+    .replace(/\[CQ:face,[^\]]*\bid=([^\],]+)[^\]]*\]/gi, (_m, id) => {
+      const v = String(id || "").trim();
+      return v ? `[表情:${v}]` : "[表情]";
+    })
+    .replace(/\[CQ:mface,[^\]]*\]/g, "[表情]")
     .replace(/\[CQ:image,[^\]]*\]/g, "[图片]")
     .replace(/\[CQ:video,[^\]]*\]/g, "[视频]")
     .replace(/\[CQ:record,[^\]]*\]/g, "[语音]")
@@ -517,7 +543,11 @@ function buildDecisionPayload(sessionKey) {
   const mentionedAny = items.some((x) => !!x?.mentioned);
 
   const merged = items
-    .map((x, idx) => `${idx + 1}. ${String(x?.text || "").trim()}`)
+    .map((x, idx) => {
+      const base = String(x?.text || "").trim();
+      const reply = x?.replySnippet ? `（回复内容：${String(x.replySnippet).trim()}） ` : "";
+      return `${idx + 1}. ${reply}${base}`.trim();
+    })
     .filter(Boolean)
     .join("\n");
 
@@ -635,13 +665,14 @@ function createSession(sessionKey, userId, groupId, initialMessage, options = {}
     initialMessage,
     maxTurns: config.maxTurns,
     groupContext: null, // Will be populated with group announcements and history
-    needsReply: false,
     mentionUserOnFirstReply: !!options.mentionUserOnFirstReply,
     lastImageUrls: [],
     lastImageAt: 0,
     lastVideoUrls: [],
     lastRecordUrls: [],
     lastMediaAt: 0,
+    lastReplySnippet: "",
+    lastReplyAt: 0,
   };
   sessions.set(sessionKey, session);
   return session;
@@ -661,7 +692,6 @@ function endSession(sessionKey) {
   pendingDecisionSessions.delete(sessionKey);
   pendingContextSessions.delete(sessionKey);
   pendingReplySessions.delete(sessionKey);
-  pendingReportSessions.delete(sessionKey);
   decisionBatches.delete(sessionKey);
 
   for (const [rid, info] of pendingRequests.entries()) {
@@ -857,6 +887,12 @@ function formatOneLinePlain(text, maxChars = 160) {
 // Call reply model
 function buildReplyMessages(session, sessionKey, config, attachImages) {
   const messages = [{ role: "system", content: config.replySystemPrompt }];
+  if (session && session.lastReplySnippet && nbot.now() - Number(session.lastReplyAt || 0) <= 2 * 60 * 1000) {
+    messages.push({
+      role: "system",
+      content: `用户正在回复一条消息，被回复内容（截断）如下，仅用于理解上下文：${session.lastReplySnippet}`,
+    });
+  }
   const contextInfo = buildReplyContextForPrompt(session.groupContext, session.userId);
   const lastUserMsg = session.messages.slice().reverse().find((m) => m && m.role === "user")?.content || "";
   const groupSnippet =
@@ -905,7 +941,7 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
   return messages;
 }
 
-function callReplyModel(session, sessionKey, config) {
+function callReplyModel(session, sessionKey, config, useSearch = false) {
   pendingReplySessions.add(sessionKey);
   const requestId = genRequestId("reply");
   const messages = buildReplyMessages(session, sessionKey, config, true);
@@ -919,66 +955,18 @@ function callReplyModel(session, sessionKey, config) {
     noImageRetry: false,
   });
 
-  nbot.callLlmChat(requestId, messages, {
-    modelName: config.replyModel,
-    maxTokens: 96,
-  });
-}
-
-// Call report model (supports web search)
-function callReportModel(session, sessionKey, config) {
-  pendingReportSessions.add(sessionKey);
-  const requestId = genRequestId("report");
-  pendingRequests.set(requestId, {
-    type: "report",
-    sessionKey,
-    createdAt: nbot.now(),
-  });
-
-  // Treat report generation as activity to avoid accidental timeout cleanup.
-  session.lastActivity = nbot.now();
-
-  // Build conversation history text
-  let conversationText = "对话记录：\n\n";
-  for (const msg of session.messages) {
-    const roleLabel = msg.role === "user" ? "用户" : "助手";
-    conversationText += `${roleLabel}: ${msg.content}\n\n`;
-  }
-
-  const messages = [
-    { role: "system", content: config.replySystemPrompt },
-    { role: "user", content: conversationText + "\n\n" + config.reportPrompt },
-  ];
-
-  session.state = "generating_report";
-
-  // Use web search if enabled
-  if (config.enableWebsearch) {
+  if (useSearch && config.enableWebsearch) {
     nbot.callLlmChatWithSearch(requestId, messages, {
       modelName: config.websearchModel,
-      maxTokens: 4096,
+      maxTokens: 96,
       enableSearch: true,
     });
   } else {
     nbot.callLlmChat(requestId, messages, {
       modelName: config.replyModel,
-      maxTokens: 4096,
+      maxTokens: 96,
     });
   }
-}
-
-// End session and generate report
-function endSessionWithReport(session, sessionKey, config) {
-  // Treat control action as activity to avoid accidental timeout cleanup.
-  session.lastActivity = nbot.now();
-
-  if (session.messages.length < 2) {
-    nbot.sendReply(session.userId, session.groupId || 0, "已结束本次对话。");
-    endSession(sessionKey);
-    return;
-  }
-
-  callReportModel(session, sessionKey, config);
 }
 
 // Handle decision result
@@ -997,11 +985,11 @@ function handleDecisionResult(requestInfo, success, content) {
 
   function parseDecision(raw) {
     const text = String(raw || "").trim();
-    if (!text) return { decision: "NO", confidence: 0, reason: "" };
+    if (!text) return { decision: "NO", confidence: 0, reason: "", useSearch: false };
 
     const direct = text.toUpperCase();
     if (direct === "YES" || direct === "NO") {
-      return { decision: direct, confidence: 1, reason: "direct" };
+      return { decision: direct, confidence: 1, reason: "direct", useSearch: false };
     }
 
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -1016,10 +1004,13 @@ function handleDecisionResult(requestInfo, success, content) {
         const decision = String(obj.decision || obj.answer || "").trim().toUpperCase();
         const confidence = Number(obj.confidence);
         const reason = String(obj.reason || "").trim();
+        const useSearchRaw = obj.use_search ?? obj.useSearch ?? obj.search ?? obj.use_websearch;
+        const useSearch = useSearchRaw === true || String(useSearchRaw || "").toLowerCase() === "true";
         return {
           decision: decision === "YES" ? "YES" : "NO",
           confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
           reason,
+          useSearch,
         };
       } catch {
         return null;
@@ -1043,19 +1034,19 @@ function handleDecisionResult(requestInfo, success, content) {
     const m = candidate.match(/\b(YES|NO)\b/i);
     if (m && m[1]) {
       const token = String(m[1]).toUpperCase();
-      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_token" };
+      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_token", useSearch: false };
     }
     const m2 = candidate.match(/decision\s*[:=]\s*(yes|no)/i);
     if (m2 && m2[1]) {
       const token = String(m2[1]).toUpperCase();
-      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_decision" };
+      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_decision", useSearch: false };
     }
 
     // Strict mode: any other non-JSON response is treated as NO (avoid false positives).
     nbot.log.warn(
       `[smart-assist] decision parse failed mentioned=${mentioned ? "Y" : "N"} raw=${maskSensitive(text).slice(0, 220)}`
     );
-    return { decision: "NO", confidence: 0, reason: "non_json" };
+    return { decision: "NO", confidence: 0, reason: "non_json", useSearch: false };
   }
 
   if (!success) {
@@ -1069,10 +1060,6 @@ function handleDecisionResult(requestInfo, success, content) {
   }
 
   const existing = sessions.get(sessionKey);
-  if (existing) {
-    return;
-  }
-
   const parsed = parseDecision(content);
 
   // If the model didn't follow the strict JSON format, retry once with a stronger instruction.
@@ -1098,11 +1085,10 @@ function handleDecisionResult(requestInfo, success, content) {
     return;
   }
 
-  // Final fallback: if mentioned but still non-JSON, treat as YES so the bot doesn't look broken.
-  const needsHelp = parsed.decision === "YES" || (mentioned && parsed.reason === "non_json");
+  const needsHelp = parsed.decision === "YES";
 
   nbot.log.info(
-    `[smart-assist] decision=${parsed.decision} conf=${parsed.confidence.toFixed(2)} triggered=${needsHelp ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitive(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
+    `[smart-assist] decision=${parsed.decision} conf=${parsed.confidence.toFixed(2)} triggered=${needsHelp ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} search=${parsed.useSearch ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitive(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
   );
 
   if (!needsHelp) {
@@ -1110,6 +1096,15 @@ function handleDecisionResult(requestInfo, success, content) {
     if (batch && batch.items.length) {
       const urgent = batch.items.some((x) => !!x?.mentioned);
       scheduleDecisionFlush(sessionKey, urgent, config);
+    }
+    return;
+  }
+
+  // If a session already exists, only reply when the decision model says YES.
+  // This makes the assistant feel more like a human in QQ group chats (not every turn must reply).
+  if (existing && existing.state === "active") {
+    if (!pendingReplySessions.has(sessionKey)) {
+      callReplyModel(existing, sessionKey, config, parsed.useSearch);
     }
     return;
   }
@@ -1132,6 +1127,15 @@ function handleDecisionResult(requestInfo, success, content) {
     mentionUserOnFirstReply: true,
   });
   session.groupContext = groupContext || null;
+
+  const replySnippetFromBatch = Array.isArray(items)
+    ? items.map((x) => String(x?.replySnippet || "")).find((s) => !!s.trim())
+    : "";
+  if (replySnippetFromBatch) {
+    session.lastReplySnippet = replySnippetFromBatch;
+    session.lastReplyAt = nbot.now();
+  }
+
   for (const t of seedItems) {
     addMessageToSession(session, "user", sanitizeMessageForLlm(t, null) || t);
   }
@@ -1148,7 +1152,7 @@ function handleDecisionResult(requestInfo, success, content) {
   nbot.log.info("[smart-assist] created new session");
 
   // Start assisting immediately
-  callReplyModel(session, sessionKey, config);
+  callReplyModel(session, sessionKey, config, parsed.useSearch);
 }
 
 // Handle reply result
@@ -1239,137 +1243,6 @@ function handleReplyResult(requestInfo, success, content) {
     endSession(sessionKey);
     return;
   }
-
-  // If user sent more messages while we were waiting for this reply, respond once more with latest context.
-  if (session.needsReply && session.state === "active") {
-    session.needsReply = false;
-    callReplyModel(session, sessionKey, config);
-  }
-}
-
-// Handle report result
-function handleReportResult(requestInfo, success, content) {
-  const { sessionKey } = requestInfo;
-  pendingReportSessions.delete(sessionKey);
-
-  const session = sessions.get(sessionKey);
-  const config = getConfig();
-
-  if (!session) {
-    nbot.log.warn("Session not found");
-    return;
-  }
-
-  if (!success) {
-    nbot.sendReply(
-      session.userId,
-      session.groupId || 0,
-      "分析报告生成失败，请稍后再试。"
-    );
-    endSession(sessionKey);
-    return;
-  }
-
-  function splitReportParts(raw) {
-    const text = String(raw || "");
-    const mdSep = "===MARKDOWN===";
-    const copySep = "===COPY===";
-
-    const mdIdx = text.indexOf(mdSep);
-    const copyIdx = text.indexOf(copySep);
-
-    if (mdIdx !== -1 && copyIdx !== -1 && copyIdx > mdIdx) {
-      const markdown = text.slice(mdIdx + mdSep.length, copyIdx).trim();
-      const copy = text.slice(copyIdx + copySep.length).trim();
-      return { markdown, copy };
-    }
-
-    return { markdown: text.trim(), copy: "" };
-  }
-
-  const parts = splitReportParts(content);
-  const markdownReport = parts.markdown || "";
-  let copyText = parts.copy || "";
-  if (!copyText.trim() && markdownReport) {
-    copyText = markdownReport;
-  }
-
-  const now = new Date();
-  const meta = `轮数：${session.turnCount}  时间：${now.toLocaleString()}`;
-  const title = `${config.botName} 分析报告`;
-  const reportImageBase64 = markdownReport
-    ? nbot.renderMarkdownImage(title, meta, markdownReport, 720)
-    : "";
-
-  const nodes = [
-    {
-      name: config.botName,
-      content: `【${config.botName} 分析报告】\n${meta}`,
-    },
-  ];
-
-  // Add conversation history summary
-  let historyContent = "【对话摘要】\n\n";
-  for (const msg of session.messages) {
-    const roleLabel = msg.role === "user" ? "用户" : "助手";
-    const shortContent =
-      msg.content.length > 200
-        ? msg.content.substring(0, 200) + "..."
-        : msg.content;
-    historyContent += `${roleLabel}: ${shortContent}\n\n`;
-  }
-  nodes.push({ name: config.botName, content: historyContent });
-
-  if (reportImageBase64) {
-    nodes.push({
-      name: config.botName,
-      content: `【图文版】\n\n[CQ:image,file=base64://${reportImageBase64}]`,
-    });
-  } else if (markdownReport) {
-    const maxNodeLength = 1800;
-    const full = `【图文版（文本回退）】\n\n${markdownReport}`;
-    const chunks = [];
-    let remaining = full;
-    while (remaining.length > 0) {
-      chunks.push(remaining.substring(0, maxNodeLength));
-      remaining = remaining.substring(maxNodeLength);
-    }
-    chunks.forEach((chunk, idx) => {
-      nodes.push({
-        name: config.botName,
-        content:
-          chunks.length === 1
-            ? chunk
-            : `【图文版 ${idx + 1}/${chunks.length}】\n\n${chunk}`,
-      });
-    });
-  }
-
-  if (copyText.trim()) {
-    const maxNodeLength = 1800;
-    const full = `【可复制版】\n\n${copyText.trim()}`;
-    const chunks = [];
-    let remaining = full;
-    while (remaining.length > 0) {
-      chunks.push(remaining.substring(0, maxNodeLength));
-      remaining = remaining.substring(maxNodeLength);
-    }
-    chunks.forEach((chunk, idx) => {
-      nodes.push({
-        name: config.botName,
-        content:
-          chunks.length === 1
-            ? chunk
-            : `【可复制版 ${idx + 1}/${chunks.length}】\n\n${chunk}`,
-      });
-    });
-  }
-
-  // Send forward message
-  nbot.sendForwardMessage(session.userId, session.groupId || 0, nodes);
-
-  // Cleanup session and update cooldown
-  endSession(sessionKey);
 }
 
 // Handle group info response
@@ -1435,13 +1308,6 @@ function cleanupStaleRequests(config) {
       const session = sessions.get(sessionKey);
       if (session && session.state === "active") {
         nbot.sendReply(session.userId, session.groupId || 0, "回复超时，请再说一次。");
-      }
-    } else if (info?.type === "report") {
-      pendingReportSessions.delete(sessionKey);
-      const session = sessions.get(sessionKey);
-      if (session) {
-        nbot.sendReply(session.userId, session.groupId || 0, "分析报告生成超时，请稍后再试。");
-        endSession(sessionKey);
       }
     }
 
@@ -1541,6 +1407,7 @@ return {
       const imageUrls = extractImageUrlsFromCtx(ctx);
       const videoUrls = extractVideoUrlsFromCtx(ctx);
       const recordUrls = extractRecordUrlsFromCtx(ctx);
+      const replyCtx = extractReplyMessageContext(ctx);
       if (imageUrls.length) {
         noteRecentGroupImages(group_id, imageUrls);
         noteRecentUserImages(sessionKey, imageUrls);
@@ -1565,6 +1432,50 @@ return {
           session.lastMediaAt = nbot.now();
         }
       }
+      if (
+        replyCtx &&
+        ((Array.isArray(replyCtx.imageUrls) && replyCtx.imageUrls.length) ||
+          (Array.isArray(replyCtx.videoUrls) && replyCtx.videoUrls.length) ||
+          (Array.isArray(replyCtx.recordUrls) && replyCtx.recordUrls.length))
+      ) {
+        // Treat replied media as recent media for context resolution.
+        // (Use the typed buckets so we don't mix image/video/record in the wrong cache.)
+        const rImages = Array.isArray(replyCtx.imageUrls) ? replyCtx.imageUrls : [];
+        const rVideos = Array.isArray(replyCtx.videoUrls) ? replyCtx.videoUrls : [];
+        const rRecords = Array.isArray(replyCtx.recordUrls) ? replyCtx.recordUrls : [];
+
+        if (rImages.length) {
+          noteRecentGroupImages(group_id, rImages);
+          noteRecentUserImages(sessionKey, rImages);
+          if (session) {
+            session.lastImageUrls = rImages;
+            session.lastImageAt = nbot.now();
+          }
+        }
+        if (rVideos.length) {
+          noteRecentGroupVideos(group_id, rVideos);
+          noteRecentUserVideos(sessionKey, rVideos);
+          if (session) {
+            session.lastVideoUrls = rVideos;
+            session.lastMediaAt = nbot.now();
+          }
+        }
+        if (rRecords.length) {
+          noteRecentGroupRecords(group_id, rRecords);
+          noteRecentUserRecords(sessionKey, rRecords);
+          if (session) {
+            session.lastRecordUrls = rRecords;
+            session.lastMediaAt = nbot.now();
+          }
+        }
+        if (session) {
+          session.lastMediaAt = nbot.now();
+        }
+      }
+      if (replyCtx && replyCtx.snippet && session) {
+        session.lastReplySnippet = replyCtx.snippet;
+        session.lastReplyAt = nbot.now();
+      }
 
       // If active session exists
       if (session && session.state === "active") {
@@ -1575,24 +1486,26 @@ return {
           return true;
         }
 
-        // Check early analysis keywords
-        if (containsKeyword(message, config.earlyAnalysisKeywords)) {
-          endSessionWithReport(session, sessionKey, config);
-          return true;
-        }
-
-        // Continue conversation
+        // Continue conversation (store context), but do NOT force a reply every turn.
         addMessageToSession(session, "user", llmMessage || message);
-        if (pendingReplySessions.has(sessionKey)) {
-          session.needsReply = true;
-        } else {
-          callReplyModel(session, sessionKey, config);
-        }
-        return true;
-      }
 
-      // If session is generating report, ignore message
-      if (session && session.state === "generating_report") {
+        // Let the decision model decide whether we should reply to this new message.
+        const trigger = getDecisionTrigger(ctx, message, config);
+        let batch = decisionBatches.get(sessionKey);
+        if (!batch) {
+          batch = { userId: user_id, groupId: group_id, items: [] };
+          decisionBatches.set(sessionKey, batch);
+        }
+        batch.userId = user_id;
+        batch.groupId = group_id;
+        batch.items.push({
+          t: nbot.now(),
+          text: sanitizeMessageForLlm(message, ctx),
+          mentioned: !!trigger.mentioned,
+          imageUrls,
+          replySnippet: replyCtx ? replyCtx.snippet : "",
+        });
+        scheduleDecisionFlush(sessionKey, trigger.urgent, config);
         return true;
       }
 
@@ -1614,6 +1527,7 @@ return {
           text: sanitizeMessageForLlm(message, ctx),
           mentioned: !!trigger.mentioned,
           imageUrls,
+          replySnippet: replyCtx ? replyCtx.snippet : "",
         });
         scheduleDecisionFlush(sessionKey, trigger.urgent, config);
       }
@@ -1643,9 +1557,6 @@ return {
         break;
       case "reply":
         handleReplyResult(requestInfo, success, content);
-        break;
-      case "report":
-        handleReportResult(requestInfo, success, content);
         break;
       default:
         nbot.log.warn(`Unknown request type: ${requestInfo.type}`);
