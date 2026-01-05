@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.17
+ * nBot Smart Assistant Plugin v2.2.18
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * supports web search, generates analysis report via forward message
  *
@@ -69,6 +69,7 @@ function getConfig() {
       "重要：要非常保守，避免误触发。",
       "- 只要像玩笑/吐槽/阴阳怪气/反讽/自问自答/口头禅、或没有明确问题与需求，一律判定 NO。",
       "- 被 @ 机器人只是“优先级更高”的信号，仍然可以判定 NO。",
+      "- 没有 @ 机器人时：除非用户明显是在向全群求助/提问（期待任何人回答），否则一律判定 NO。不要抢别人的对话。",
       "- 只有媒体/占位符（如“[图片] / [视频] / [语音] / [卡片]”）且没有任何文字内容，一律判定 NO（不要去‘说明无法判断’）。",
       "- 只有表情/颜文字/一个词/无意义应答（如“哈哈”“？”“。。。”）一律判定 NO。",
       "- 用户在 @ 其他人（而不是 @ 机器人）时，通常是在找那个人说话：除非明确要求机器人回答，否则判定 NO。",
@@ -86,21 +87,14 @@ function getConfig() {
   const replySystemPrompt =
     cfg.reply_system_prompt ||
     [
-      "你是群聊中的智能助手。目标：给出针对性的可执行帮助，并且尽量少打扰。",
+      "你是 QQ 群里的热心老群友式助手。目标：用一句话给出最有用的下一步，尽量少打扰。",
       "",
-      "要求：",
-      "- 用中文回答，像真人群友一样简短。",
-      "- 这是 QQ 群聊：只输出【一行】纯文本（不要换行），不要 Markdown（不要列表/加粗/代码块/反引号）。",
-      "- 长度控制：尽量不超过 60 个中文字符；最多 2 句但必须同一行。",
-      "- 最多问 1 个关键澄清问题；优先让对方直接贴“报错全文/截图/日志”。不要罗列多个问题/清单。",
-      "- 如果只是打招呼/玩笑/吐槽/闲聊，不要进入长对话，最多一句话带过或不介入。",
-      "- 信息不足时先问 1 个关键点；信息足够则给一个最可能有效的下一步。",
-      "- 不要用客服腔/长解释（例如“无法直接判断/需要额外信息/请提供以下几点”这类话术）。",
-      "- 不要连续道歉；尽量不要用“抱歉”。如果看不到图，就一句话说“看不到图，贴下日志/报错文字”。",
-      "- 不要输出任何 QQ 号/ID/Token/密钥。",
-      "- 不要在内容里自己写“@某某”，@ 由系统在必要时自动添加。",
-      "- 如果用户是在开玩笑或不需要帮助，礼貌简短地不介入或反问确认。",
-      "- 严禁编造任何“群内信息/版本/mod/服务器细节”。只有在上文明确提供时才可引用。",
+      "输出要求（硬性）：",
+      "- 只输出【一行】中文短句；禁止换行；禁止 Markdown/列表/编号/加粗/代码块。",
+      "- 语气自然像群友：别写长段落、别客服腔、别“为了更好地帮助你…”。",
+      "- 最多问 1 个关键追问；否则直接给一个最可能有效的下一步。",
+      "- 禁止编造任何未在上文出现的事实（例如版本/整合包/服务器细节/群内信息）。不确定就问一句。",
+      "- 不要输出任何 QQ 号/ID/Token/密钥；@ 由系统自动添加，你不要手写 @。",
     ].join("\n");
 
   const reportPrompt =
@@ -148,7 +142,7 @@ function getConfig() {
       return Math.max(5, Math.min(100, Math.floor(v)));
     })(),
     // Keep formatting limits internal; don't rely on config for behavior.
-    replyMaxChars: 100,
+    replyMaxChars: 80,
   };
 }
 
@@ -256,45 +250,16 @@ function noteRecentUserImages(sessionKey, urls) {
   recentUserImages.set(String(sessionKey), { t: nbot.now(), urls: urls.slice(0, 4) });
 }
 
-function looksLikeHelpRequest(text) {
-  const t = stripAllCqSegments(String(text || "")).trim();
-  if (!t) return false;
-
-  // Avoid running the decision model on obvious chit-chat noise.
-  if (t.length <= 2) return /[?？]/.test(t);
-
-  const hasQuestionMark = /[?？]/.test(t);
-  const hasQuestionParticles = /(?:吗|么|咋|咩|捏)\s*$/u.test(t);
-  const hasAskWord = /(?:怎么|为何|为什么|咋办|怎么办|求助|帮(?:帮|忙)?|救救|有人懂|谁能|请问|能不能)/u.test(t);
-  const hasProblemWord =
-    /(?:报错|错误|异常|崩溃|闪退|打不开|开不起来|登录|扫码|安装|部署|配置|无法|不能|不行|失败|卡住|连不上|没反应)/u.test(
-      t
-    );
-
-  const score =
-    (hasQuestionMark || hasQuestionParticles ? 1 : 0) +
-    (hasAskWord ? 1 : 0) +
-    (hasProblemWord ? 1 : 0);
-  if (score >= 2) return true;
-
-  // Explicit "求助/救命" without a question mark.
-  if (!hasQuestionMark && /(?:求助|救命|谁能帮)/u.test(t) && (hasProblemWord || t.length >= 8)) {
-    return true;
-  }
-
-  return false;
-}
-
 function looksReferentialShortQuestion(text) {
   const t = stripAllCqSegments(String(text || "")).trim();
   if (!t) return false;
-  if (t.length > 20) return false;
-  return /(?:这个|那个|上面|刚才|这张|那张|啥|什么|哪个|哪款|哪套|什么意思|怎么弄)/u.test(t);
+  if (t.length > 40) return false;
+  return /(?:这个|那个|上面|刚才|这张|那张|啥|什么|哪个|哪款|哪套|什么意思|怎么弄|光影|这是啥|这是什么)/u.test(t);
 }
 
 function buildRecentGroupSnippet(groupContext, limit = 15) {
   if (!groupContext || !Array.isArray(groupContext.history) || groupContext.history.length === 0) return "";
-  const maxLines = Number.isFinite(limit) ? Math.max(3, Math.min(50, Math.floor(limit))) : 15;
+  const maxLines = Number.isFinite(limit) ? Math.max(3, Math.min(100, Math.floor(limit))) : 15;
 
   const lines = [];
   const slice = groupContext.history.slice(0, maxLines).slice();
@@ -302,12 +267,15 @@ function buildRecentGroupSnippet(groupContext, limit = 15) {
   if (timed >= Math.ceil(slice.length / 2)) {
     slice.sort((a, b) => Number(a?.time || 0) - Number(b?.time || 0));
   }
+  const maxChars = 6000;
   for (const m of slice) {
     const sender = m?.sender || {};
     const name = String(sender.card || sender.nickname || "群友").replace(/\s+/g, " ").trim() || "群友";
     const content = sanitizeMessageForLlm(String(m?.raw_message || ""), null);
     if (!content) continue;
-    lines.push(`${name}: ${content.slice(0, 120)}`);
+    const line = `${name}: ${content.slice(0, 120)}`;
+    lines.push(line);
+    if (lines.join("\n").length >= maxChars) break;
   }
   if (!lines.length) return "";
   return `【最近群聊片段】\n${lines.join("\n")}`.trim();
@@ -608,7 +576,7 @@ function fetchGroupContext(sessionKey, userId, groupId, message, mentioned, item
 }
 
 // Call decision model
-function callDecisionModel(sessionKey, userId, groupId, message, mentioned, items, config, groupContext) {
+function callDecisionModel(sessionKey, userId, groupId, message, mentioned, items, config, groupContext, options = {}) {
   const requestId = genRequestId("decision");
   pendingDecisionSessions.add(sessionKey);
   pendingRequests.set(requestId, {
@@ -620,6 +588,7 @@ function callDecisionModel(sessionKey, userId, groupId, message, mentioned, item
     mentioned: !!mentioned,
     items: Array.isArray(items) ? items : [],
     groupContext: groupContext || null,
+    formatRetry: !!options.formatRetry,
     createdAt: nbot.now(),
   });
 
@@ -665,7 +634,7 @@ function callDecisionModel(sessionKey, userId, groupId, message, mentioned, item
   }
 
   const messages = [
-    { role: "system", content: config.decisionSystemPrompt },
+    { role: "system", content: options.decisionSystemPromptOverride || config.decisionSystemPrompt },
     {
       role: "user",
       content: [
@@ -768,7 +737,7 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
   const lastUserMsg = session.messages.slice().reverse().find((m) => m && m.role === "user")?.content || "";
   const groupSnippet =
     session.groupContext && looksReferentialShortQuestion(lastUserMsg)
-      ? buildRecentGroupSnippet(session.groupContext, 20)
+      ? buildRecentGroupSnippet(session.groupContext, config.contextMessageCount)
       : "";
   if (contextInfo && session.turnCount === 0) {
     messages.push({
@@ -787,8 +756,9 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
 
   if (attachImages) {
     const shouldAttachImage =
-      session.turnCount === 0 &&
-      (looksReferentialShortQuestion(lastUserMsg) || String(lastUserMsg).includes("[图片]"));
+      looksReferentialShortQuestion(lastUserMsg) ||
+      String(lastUserMsg).includes("[图片]") ||
+      (session.lastImageAt && nbot.now() - Number(session.lastImageAt || 0) <= 15 * 1000);
     const imageUrls = shouldAttachImage ? getRelevantImageUrlsForSession(session, sessionKey) : [];
     const httpImageUrls = imageUrls.filter((u) => /^https?:\/\//i.test(String(u || ""))).slice(0, 2);
     if (httpImageUrls.length) {
@@ -817,7 +787,7 @@ function callReplyModel(session, sessionKey, config) {
 
   nbot.callLlmChat(requestId, messages, {
     modelName: config.replyModel,
-    maxTokens: 160,
+    maxTokens: 96,
   });
 }
 
@@ -970,7 +940,32 @@ function handleDecisionResult(requestInfo, success, content) {
   }
 
   const parsed = parseDecision(content);
-  const needsHelp = parsed.decision === "YES";
+
+  // If the model didn't follow the strict JSON format, retry once with a stronger instruction.
+  if (parsed.reason === "non_json" && !requestInfo.formatRetry) {
+    const stronger = [
+      config.decisionSystemPrompt,
+      "",
+      "你上一条输出不符合格式。再次强调：只允许输出单行 JSON，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符。",
+      "示例：{\"decision\":\"NO\",\"confidence\":0.0,\"reason\":\"不确定\"}",
+    ].join("\n");
+
+    callDecisionModel(
+      sessionKey,
+      userId,
+      groupId,
+      message,
+      mentioned,
+      items,
+      config,
+      groupContext || null,
+      { formatRetry: true, decisionSystemPromptOverride: stronger }
+    );
+    return;
+  }
+
+  // Final fallback: if mentioned but still non-JSON, treat as YES so the bot doesn't look broken.
+  const needsHelp = parsed.decision === "YES" || (mentioned && parsed.reason === "non_json");
 
   nbot.log.info(
     `[smart-assist] decision=${parsed.decision} conf=${parsed.confidence.toFixed(2)} triggered=${needsHelp ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitive(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`

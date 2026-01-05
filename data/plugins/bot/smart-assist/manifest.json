@@ -1,7 +1,7 @@
 {
   "id": "smart-assist",
   "name": "智能助手",
-  "version": "2.2.17",
+  "version": "2.2.18",
   "author": "nBot",
   "description": "智能对话助手：自动监控群聊消息并识别求助场景（无需@；@会提高优先级），进入多轮对话并最终通过合并转发生成分析报告；可选 Tavily 联网搜索（需在 LLM 模块配置 tavily_api_key）。",
   "type": "bot",
