@@ -693,6 +693,36 @@ function extractTargetFromCtx(ctx) {
     };
   }
 
+  const noticeFile =
+    ctx.raw_event &&
+    typeof ctx.raw_event === "object" &&
+    ctx.raw_event.file &&
+    typeof ctx.raw_event.file === "object"
+      ? ctx.raw_event.file
+      : null;
+
+  if (noticeFile) {
+    const url = noticeFile.url || noticeFile.file_url || noticeFile.file;
+    const name = noticeFile.name || noticeFile.file_name || noticeFile.filename;
+    const fileIdAlt = noticeFile.id || noticeFile.file_id || noticeFile.fileId || noticeFile.fid;
+    const busidAlt =
+      noticeFile.busid || noticeFile.busi_id || noticeFile.busId || noticeFile.busiId;
+
+    if (url) {
+      return { type: "file", url, name: name || "日志文件" };
+    }
+
+    if (fileIdAlt) {
+      return {
+        type: "file",
+        url: null,
+        fileId: fileIdAlt,
+        busid: busidAlt,
+        name: name || "日志文件",
+      };
+    }
+  }
+
   const text = ctx.raw_message || "";
   if (text) {
     return { type: "text", text };
@@ -1084,6 +1114,51 @@ return {
       return true;
     }
 
+    return true;
+  },
+
+  onNotice(ctx) {
+    const config = getConfig();
+    cleanupExpiredSessions(config);
+    cleanupPendingFileUrlRequests(config);
+
+    if (!ctx || ctx.notice_type !== "group_upload") {
+      return true;
+    }
+
+    const groupId = Number(ctx.group_id || 0);
+    const userId = Number(ctx.user_id || 0);
+    const selfId = Number(ctx.self_id || 0);
+
+    if (!groupId || !userId) return true;
+    if (selfId && userId === selfId) return true;
+
+    if (!config.auto_trigger) {
+      return true;
+    }
+
+    const target = extractTargetFromCtx(ctx);
+    if (!target || target.type !== "file") {
+      return true;
+    }
+
+    const fileName = target.name || "";
+    const lower = String(fileName || "").toLowerCase();
+    const isText = isTextFile(lower);
+    const isArchive = isArchiveFile(lower);
+    const matchResult = isText
+      ? matchKeywordsOrdered(fileName, config.text_file_keywords)
+      : isArchive
+        ? matchKeywordsOrdered(fileName, config.archive_keywords).matched
+          ? matchKeywordsOrdered(fileName, config.archive_keywords)
+          : matchKeywordsOrdered(fileName, config.text_file_keywords)
+        : { matched: false };
+
+    if (!matchResult.matched) {
+      return true;
+    }
+
+    handleFileTarget(userId, groupId, target, config);
     return true;
   },
 
