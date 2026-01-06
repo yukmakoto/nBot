@@ -1,0 +1,262 @@
+{
+  "id": "mc-log-analysis",
+  "name": "我的世界日志分析",
+  "version": "1.0.0",
+  "author": "nBot",
+  "description": "自动分析 Minecraft 崩溃日志（txt/log 或压缩包）。支持回复文件或会话输入。",
+  "type": "bot",
+  "permissions": [],
+  "signature": null,
+  "builtin": true,
+  "commands": [
+    "解析",
+    "分析",
+    "日志分析",
+    "mc分析",
+    "MC分析"
+  ],
+  "configSchema": [
+    {
+      "key": "analysis_model",
+      "type": "string",
+      "label": "分析模型",
+      "description": "用于日志分析的模型映射名称（需在 LLM 模块中配置）",
+      "default": "default",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "prompt",
+      "type": "string",
+      "label": "系统提示词",
+      "description": "发送给 AI 的系统提示词",
+      "default": "分析这个我的世界java版错误日志(只给出原因,解决方法，要求内容精简易懂)：",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "user_prompt",
+      "type": "string",
+      "label": "用户提示词",
+      "description": "发送给 AI 的用户提示词",
+      "default": "请分析以下内容：",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "text1",
+      "type": "string",
+      "label": "触发提示文本",
+      "description": "触发指令时发送的文本",
+      "default": "发送您要分析的内容或文件开始分析，发送退出结束分析(注:文件仅限txt,log如zip请解压)",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "text2",
+      "type": "string",
+      "label": "退出提示文本",
+      "description": "退出时发送的文本",
+      "default": "已结束，感谢使用！",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "text3",
+      "type": "string",
+      "label": "处理中提示文本",
+      "description": "接收到内容时发送的提示文本",
+      "default": "已开始解析，请耐心等待并注意群消息。",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "text4",
+      "type": "string",
+      "label": "超时提示文本",
+      "description": "超时自动结束时发送的文本",
+      "default": "已超时，自动结束。",
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "exit_keywords",
+      "type": "array",
+      "label": "退出关键词",
+      "description": "退出会话的指令列表",
+      "default": [
+        "退出",
+        "结束",
+        "取消"
+      ],
+      "options": null,
+      "itemType": "string",
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "text_file_keywords",
+      "type": "array",
+      "label": "文本关键词",
+      "description": "文本文件名包含这些关键词时自动触发",
+      "default": [
+        "crash",
+        "fcl",
+        "游戏崩溃",
+        "log",
+        "txt"
+      ],
+      "options": null,
+      "itemType": "string",
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "archive_keywords",
+      "type": "array",
+      "label": "压缩包关键词",
+      "description": "压缩包文件名包含这些关键词时自动触发",
+      "default": [
+        "错误报告"
+      ],
+      "options": null,
+      "itemType": "string",
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "max_content_length",
+      "type": "number",
+      "label": "最大内容长度",
+      "description": "发送给 AI 的最大字符数",
+      "default": 50000,
+      "options": null,
+      "itemType": null,
+      "min": 1000,
+      "max": 200000
+    },
+    {
+      "key": "wait_timeout_seconds",
+      "type": "number",
+      "label": "等待超时(秒)",
+      "description": "进入会话后等待用户输入的超时时间",
+      "default": 120,
+      "options": null,
+      "itemType": null,
+      "min": 10,
+      "max": 600
+    },
+    {
+      "key": "file_url_timeout_seconds",
+      "type": "number",
+      "label": "文件链接超时(秒)",
+      "description": "拉取群文件下载链接的等待超时时间",
+      "default": 15,
+      "options": null,
+      "itemType": null,
+      "min": 5,
+      "max": 120
+    },
+    {
+      "key": "max_download_bytes",
+      "type": "number",
+      "label": "最大下载大小(字节)",
+      "description": "下载文件或压缩包时的大小上限（用于防止过大文件）",
+      "default": 30000000,
+      "options": null,
+      "itemType": null,
+      "min": 1048576,
+      "max": 500000000
+    },
+    {
+      "key": "max_extract_bytes",
+      "type": "number",
+      "label": "最大解压总大小(字节)",
+      "description": "解压后文件总大小上限（用于防止压缩包炸弹）",
+      "default": 120000000,
+      "options": null,
+      "itemType": null,
+      "min": 10485760,
+      "max": 1000000000
+    },
+    {
+      "key": "max_file_bytes",
+      "type": "number",
+      "label": "最大读取文件大小(字节)",
+      "description": "读取单个日志文件的最大字节数",
+      "default": 15000000,
+      "options": null,
+      "itemType": null,
+      "min": 1048576,
+      "max": 200000000
+    },
+    {
+      "key": "allow_archive",
+      "type": "boolean",
+      "label": "允许压缩包",
+      "description": "是否允许直接分析压缩包文件",
+      "default": false,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "show_processing_msg",
+      "type": "boolean",
+      "label": "显示处理中提示",
+      "description": "是否发送处理中提示消息",
+      "default": true,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "auto_trigger",
+      "type": "boolean",
+      "label": "自动触发",
+      "description": "检测到符合关键词的文件时自动触发分析",
+      "default": true,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    }
+  ],
+  "config": {
+    "analysis_model": "default",
+    "prompt": "分析这个我的世界java版错误日志(只给出原因,解决方法，要求内容精简易懂)：",
+    "user_prompt": "请分析以下内容：",
+    "text1": "发送您要分析的内容或文件开始分析，发送退出结束分析(注:文件仅限txt,log如zip请解压)",
+    "text2": "已结束，感谢使用！",
+    "text3": "已开始解析，请耐心等待并注意群消息。",
+    "text4": "已超时，自动结束。",
+    "exit_keywords": ["退出", "结束", "取消"],
+    "text_file_keywords": ["crash", "fcl", "游戏崩溃", "log", "txt"],
+    "archive_keywords": ["错误报告"],
+    "max_content_length": 50000,
+    "wait_timeout_seconds": 120,
+    "file_url_timeout_seconds": 15,
+    "max_download_bytes": 30000000,
+    "max_extract_bytes": 120000000,
+    "max_file_bytes": 15000000,
+    "allow_archive": false,
+    "show_processing_msg": true,
+    "auto_trigger": true
+  }
+}
