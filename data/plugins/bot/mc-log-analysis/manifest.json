@@ -1,7 +1,7 @@
 {
   "id": "mc-log-analysis",
   "name": "我的世界日志分析",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "nBot",
   "description": "自动分析 Minecraft 崩溃日志（txt/log 或压缩包）。支持回复文件或会话输入。",
   "type": "bot",

@@ -48,6 +48,7 @@ const ARCHIVE_EXTENSIONS = [".zip", ".tar", ".tar.gz", ".tgz", ".rar", ".7z", ".
 
 const sessions = new Map();
 const pendingFileUrlRequests = new Map();
+const recentTriggerKeys = new Map();
 let lastCleanupAt = 0;
 let requestIdCounter = 0;
 
@@ -113,6 +114,41 @@ function getConfig() {
 
 function buildSessionKey(userId, groupId) {
   return `${groupId || 0}:${userId}`;
+}
+
+function buildTriggerKey(userId, groupId, target) {
+  const gid = groupId || 0;
+  const fid = target && target.fileId ? String(target.fileId) : "";
+  const busid = target && target.busid !== undefined && target.busid !== null ? String(target.busid) : "";
+  const url = target && target.url ? String(target.url) : "";
+  const name = target && target.name ? String(target.name) : "";
+  const identity = fid
+    ? `fid:${fid}|busid:${busid}`
+    : url
+      ? `url:${url}`
+      : `name:${name}`;
+  return `${gid}:${userId}:${identity}`;
+}
+
+function cleanupRecentTriggerKeys(now) {
+  for (const [k, expiresAt] of recentTriggerKeys.entries()) {
+    if (now >= expiresAt) {
+      recentTriggerKeys.delete(k);
+    }
+  }
+}
+
+function shouldDedupeTrigger(userId, groupId, target) {
+  const now = nbot.now();
+  cleanupRecentTriggerKeys(now);
+  const key = buildTriggerKey(userId, groupId, target);
+  const expiresAt = recentTriggerKeys.get(key);
+  if (expiresAt && now < expiresAt) {
+    return true;
+  }
+  // Dedupe window: avoid duplicate triggers when NapCat reports both message + group_upload notice.
+  recentTriggerKeys.set(key, now + 5000);
+  return false;
 }
 
 function genRequestId(type) {
@@ -738,6 +774,10 @@ function sendProcessing(userId, groupId, config) {
 }
 
 function handleFileTarget(userId, groupId, target, config) {
+  if (shouldDedupeTrigger(userId, groupId, target)) {
+    return;
+  }
+
   if (target.url) {
     analyzeFileFromUrl(userId, groupId, target.url, target.name, config);
     return;
@@ -987,6 +1027,8 @@ function cleanupExpiredSessions(config) {
       nbot.sendReply(session.userId, session.groupId || 0, config.text4);
     }
   }
+
+  cleanupRecentTriggerKeys(now);
 }
 
 return {
