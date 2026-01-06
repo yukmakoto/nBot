@@ -60,26 +60,29 @@ function getConfig() {
   const decisionSystemPrompt =
     cfg.decision_system_prompt ||
     [
-      "你是群聊中的智能助手触发器。下面给出的是同一用户在短时间内的多条连续消息，请判断【是否真的需要机器人介入回复】。",
+      "你是 QQ 群聊里的「路由器（Router）」：你不负责输出回复内容，只负责决定机器人要不要介入、以及需不需要联网搜索。",
       "",
       "重要：要非常保守，避免误触发。",
-      "- 只要像玩笑/吐槽/阴阳怪气/反讽/自问自答/口头禅、或没有明确问题与需求，一律判定 NO。",
-      "- 被 @ 机器人只是“优先级更高”的信号，仍然可以判定 NO。",
-      "- 没有 @ 机器人时：除非用户明显是在向全群求助/提问（期待任何人回答），否则一律判定 NO。不要抢别人的对话。",
-      "- 如果【最近群聊片段】里已经有人给出明确答案/解决步骤/指路（例如“群文件/看公告/看置顶/去某某页面”），通常判定 NO（机器人不要抢答/复读）。",
-      "- 只有媒体/占位符（如“[图片] / [视频] / [语音] / [卡片]”）且没有任何文字内容，一律判定 NO（不要去‘说明无法判断’）。",
-      "- 只有表情/颜文字/一个词/无意义应答（如“哈哈”“？”“。。。”）一律判定 NO。",
-      "- 用户在 @ 其他人（而不是 @ 机器人）时，通常是在找那个人说话：除非明确要求机器人回答，否则判定 NO。",
+      "- 只要像玩笑/吐槽/阴阳怪气/反讽/自问自答/口头禅、或没有明确问题与需求，一律 action=IGNORE。",
+      "- 被 @ 机器人只是“优先级更高”的信号，仍然可以 action=IGNORE。",
+      "- 没有 @ 机器人时：除非用户明显是在向全群求助/提问（期待任何人回答），否则一律 action=IGNORE。不要抢别人的对话。",
+      "- 如果【最近群聊片段】里已经有人给出明确答案/解决步骤/指路（例如“群文件/看公告/看置顶/去某某页面”），通常 action=IGNORE（机器人不要抢答/复读）。",
+      "- 起哄/调戏/让机器人叫称呼/要机器人表白/刷屏/群聊闲聊，通常 action=IGNORE。",
+      "- 只有媒体/占位符（如“[图片] / [视频] / [语音] / [卡片]”）且没有任何文字内容，一律 action=IGNORE（不要去‘说明无法判断’）。",
+      "- 只有表情/颜文字/一个词/无意义应答（如“哈哈”“？”“。。。”）一律 action=IGNORE。",
+      "- 用户在 @ 其他人（而不是 @ 机器人）时，通常是在找那个人说话：除非明确要求机器人回答，否则 action=IGNORE。",
       "",
-      "请输出严格 JSON（不要 Markdown、不要解释文本）：",
-      '{"decision":"YES|NO","confidence":0.0,"reason":"<=20字中文","use_search":true|false}',
-      "输出必须为【单行 JSON】，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符。",
+      "你必须输出严格 JSON（不要 Markdown、不要解释文本），字段如下：",
+      '{"action":"IGNORE|REPLY|REACT","confidence":0.0,"reason":"<=20字中文","use_search":true|false,"topic":"<=12字中文","need_clarify":true|false}',
+      "输出必须为【单行 JSON】，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符；confidence 取 0~1。",
+      "action 说明：IGNORE=不介入；REPLY=需要机器人回一句；REACT=仅表情/已读式回应（如果不确定请用 IGNORE）。",
       "use_search 说明：只有当需要查询公开资料/最新信息/外部知识时才为 true；纯群内问题/本地报错排查/需要对方补充信息时为 false。",
       "",
-      "decision=YES 的条件（同时满足）：",
-      "1) 明确在求助/提问/请求排查/要方案/要解释；且",
-      "2) 用户期待机器人回答（不是玩笑、不是随口一句）；且",
-      "3) 你对判断非常有把握：只有在你非常确定时才允许输出 YES，否则输出 NO。",
+      "action=REPLY 的条件（同时满足）：",
+      "1) 明确在求助/提问/请求解释/要建议；且",
+      "2) 用户期待机器人回答；且",
+      "3) 群里还没人给出明确答案；且",
+      "4) 你非常确定需要你插嘴：否则用 IGNORE。",
     ].join("\n");
 
   const replySystemPrompt =
@@ -97,6 +100,7 @@ function getConfig() {
       "- 如果群里已经有人给出答案/指路，你最多补充一个更精确的关键字/入口；否则就别插嘴。",
       "- 允许提供公开/官方/开源的下载入口或检索关键字；不要输出盗版/破解/私服资源。遇到缩写歧义（例如 PCL 可能指点云库也可能指 MC 启动器）先问一句确认。",
       "- 群表情/颜文字一般不需要回应；不要说“无法理解表情”。",
+      "- 你可以承认自己是本群机器人助手，但禁止自称“Google/OpenAI/某公司训练的模型”等；不要角色扮演、不要撒娇、不要陪聊式发散。",
       "- 不要输出任何 QQ 号/ID/Token/密钥；@ 由系统自动添加，你不要手写 @。",
     ].join("\n");
 
@@ -146,19 +150,12 @@ function updateCooldown(sessionKey) {
   cooldowns.set(sessionKey, nbot.now());
 }
 
-// Cleanup expired sessions with notification
+// Cleanup expired sessions (silent; don't spam in group)
 function cleanupExpiredSessions(timeoutMs) {
   const now = nbot.now();
   for (const [key, session] of sessions.entries()) {
     if (now - session.lastActivity > timeoutMs) {
       nbot.log.info(`Session timeout, auto-ending: ${key}`);
-
-      // Notify user about timeout
-      nbot.sendReply(
-        session.userId,
-        session.groupId || 0,
-        "会话长时间无操作，已自动结束。"
-      );
 
       // Update cooldown from cleanup time
       updateCooldown(key);
@@ -779,7 +776,7 @@ function callDecisionModel(sessionKey, userId, groupId, message, mentioned, item
         contextInfo += "(未匹配到该用户的历史发言)\n";
       }
     }
-    const groupSnippet = buildRecentGroupSnippet(groupContext, 12);
+    const groupSnippet = buildRecentGroupSnippet(groupContext, Math.min(config.contextMessageCount, 30));
     if (groupSnippet) {
       contextInfo += `\n\n${groupSnippet}\n`;
     }
@@ -864,6 +861,8 @@ function formatOneLinePlain(text, maxChars = 160) {
 
   // Drop leading greetings; @ is handled by the framework.
   s = s.replace(/^(?:你好|您好|哈喽|嗨|在吗|在不在)\s*[!！。]?\s*/u, "");
+  // Drop leading "某某: " quoting style (avoid parroting chat logs).
+  s = s.replace(/^[^\s]{1,12}\s*[:：]\s*/u, "");
 
   // Prefer the first helpful sentence when output is overly long.
   if (s.length > maxChars) {
@@ -900,25 +899,10 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
   }
   const contextInfo = buildReplyContextForPrompt(session.groupContext, session.userId);
   const lastUserMsg = session.messages.slice().reverse().find((m) => m && m.role === "user")?.content || "";
-  const groupSnippetCount = looksReferentialShortQuestion(lastUserMsg)
-    ? config.contextMessageCount
-    : 12;
-  const groupSnippet =
-    session.groupContext && session.turnCount === 0
-      ? buildRecentGroupSnippet(session.groupContext, groupSnippetCount)
-      : "";
   if (contextInfo && session.turnCount === 0) {
     messages.push({
       role: "system",
       content: `以下是该用户在本群最近发言的原文（截断），仅用于理解语境；禁止推断任何未出现的事实，也不要输出任何 QQ 号/ID：\n\n${contextInfo}`,
-    });
-  }
-  if (groupSnippet) {
-    messages.push({
-      role: "system",
-      content:
-        `以下是最近群聊片段（可能包含你需要指代的“上一条图片/上文”），仅用于定位上下文；` +
-        `只回答当前用户的问题，不要替别人答话；不要推断任何未出现的事实：\n\n${groupSnippet}`,
     });
   }
 
@@ -993,11 +977,20 @@ function handleDecisionResult(requestInfo, success, content) {
 
   function parseDecision(raw) {
     const text = String(raw || "").trim();
-    if (!text) return { decision: "NO", confidence: 0, reason: "", useSearch: false };
+    if (!text) {
+      return { action: "IGNORE", confidence: 0, reason: "", useSearch: false, topic: "", needClarify: false };
+    }
 
     const direct = text.toUpperCase();
     if (direct === "YES" || direct === "NO") {
-      return { decision: direct, confidence: 1, reason: "direct", useSearch: false };
+      return {
+        action: direct === "YES" ? "REPLY" : "IGNORE",
+        confidence: 1,
+        reason: "direct",
+        useSearch: false,
+        topic: "",
+        needClarify: false,
+      };
     }
 
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -1009,16 +1002,32 @@ function handleDecisionResult(requestInfo, success, content) {
       if (!(t.startsWith("{") && t.endsWith("}"))) return null;
       try {
         const obj = JSON.parse(t);
+        const actionRaw = String(obj.action || obj.router_action || obj.mode || "").trim().toUpperCase();
         const decision = String(obj.decision || obj.answer || "").trim().toUpperCase();
         const confidence = Number(obj.confidence);
         const reason = String(obj.reason || "").trim();
         const useSearchRaw = obj.use_search ?? obj.useSearch ?? obj.search ?? obj.use_websearch;
         const useSearch = useSearchRaw === true || String(useSearchRaw || "").toLowerCase() === "true";
+        const topic = String(obj.topic || "").trim();
+        const needClarifyRaw = obj.need_clarify ?? obj.needClarify ?? obj.clarify;
+        const needClarify =
+          needClarifyRaw === true || String(needClarifyRaw || "").toLowerCase() === "true";
+
+        const action =
+          actionRaw === "REPLY" || actionRaw === "IGNORE" || actionRaw === "REACT"
+            ? actionRaw
+            : decision === "YES"
+              ? "REPLY"
+              : decision === "NO"
+                ? "IGNORE"
+                : "IGNORE";
         return {
-          decision: decision === "YES" ? "YES" : "NO",
+          action,
           confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
           reason,
           useSearch,
+          topic,
+          needClarify,
         };
       } catch {
         return null;
@@ -1042,19 +1051,33 @@ function handleDecisionResult(requestInfo, success, content) {
     const m = candidate.match(/\b(YES|NO)\b/i);
     if (m && m[1]) {
       const token = String(m[1]).toUpperCase();
-      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_token", useSearch: false };
+      return {
+        action: token === "YES" ? "REPLY" : "IGNORE",
+        confidence: 0.9,
+        reason: "heuristic_token",
+        useSearch: false,
+        topic: "",
+        needClarify: false,
+      };
     }
     const m2 = candidate.match(/decision\s*[:=]\s*(yes|no)/i);
     if (m2 && m2[1]) {
       const token = String(m2[1]).toUpperCase();
-      return { decision: token === "YES" ? "YES" : "NO", confidence: 0.9, reason: "heuristic_decision", useSearch: false };
+      return {
+        action: token === "YES" ? "REPLY" : "IGNORE",
+        confidence: 0.9,
+        reason: "heuristic_decision",
+        useSearch: false,
+        topic: "",
+        needClarify: false,
+      };
     }
 
     // Strict mode: any other non-JSON response is treated as NO (avoid false positives).
     nbot.log.warn(
       `[smart-assist] decision parse failed mentioned=${mentioned ? "Y" : "N"} raw=${maskSensitive(text).slice(0, 220)}`
     );
-    return { decision: "NO", confidence: 0, reason: "non_json", useSearch: false };
+    return { action: "IGNORE", confidence: 0, reason: "non_json", useSearch: false, topic: "", needClarify: false };
   }
 
   if (!success) {
@@ -1076,7 +1099,7 @@ function handleDecisionResult(requestInfo, success, content) {
       config.decisionSystemPrompt,
       "",
       "你上一条输出不符合格式。再次强调：只允许输出单行 JSON，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符。",
-      "示例：{\"decision\":\"NO\",\"confidence\":0.0,\"reason\":\"不确定\"}",
+      "示例：{\"action\":\"IGNORE\",\"confidence\":0.0,\"reason\":\"不确定\",\"use_search\":false,\"topic\":\"\",\"need_clarify\":false}",
     ].join("\n");
 
     callDecisionModel(
@@ -1093,13 +1116,14 @@ function handleDecisionResult(requestInfo, success, content) {
     return;
   }
 
-  const needsHelp = parsed.decision === "YES";
+  const action = parsed.action || "IGNORE";
+  const shouldReply = action === "REPLY";
 
   nbot.log.info(
-    `[smart-assist] decision=${parsed.decision} conf=${parsed.confidence.toFixed(2)} triggered=${needsHelp ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} search=${parsed.useSearch ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitive(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
+    `[smart-assist] action=${action} conf=${parsed.confidence.toFixed(2)} reply=${shouldReply ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} search=${parsed.useSearch ? "Y" : "N"} clarify=${parsed.needClarify ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitive(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
   );
 
-  if (!needsHelp) {
+  if (!shouldReply) {
     const batch = decisionBatches.get(sessionKey);
     if (batch && batch.items.length) {
       const urgent = batch.items.some((x) => !!x?.mentioned);
@@ -1132,7 +1156,7 @@ function handleDecisionResult(requestInfo, success, content) {
 
   // Create new session
   const session = createSession(sessionKey, userId, groupId, seedItems[0] || message || "", {
-    mentionUserOnFirstReply: true,
+    mentionUserOnFirstReply: !!mentioned,
   });
   session.groupContext = groupContext || null;
 
@@ -1489,7 +1513,6 @@ return {
       if (session && session.state === "active") {
         // Check interrupt keywords
         if (containsKeyword(message, config.interruptKeywords)) {
-          nbot.sendReply(user_id, group_id, "好的，已结束本次对话。");
           endSession(sessionKey);
           return true;
         }
