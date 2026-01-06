@@ -1,5 +1,6 @@
 use crate::command::{Command, CommandAction};
 use crate::models::SharedState;
+use crate::qq_face;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -102,6 +103,56 @@ fn parse_cq_field(raw: &str, key: &str) -> Option<String> {
     } else {
         Some(decode_basic_html_entities(val))
     }
+}
+
+fn decorate_message_segments_for_plugins(message: Option<&Value>) -> Value {
+    let Some(Value::Array(segments)) = message else {
+        return message.cloned().unwrap_or(Value::Null);
+    };
+
+    let mut out: Vec<Value> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        let seg_type = seg.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if seg_type != "face" {
+            out.push(seg.clone());
+            continue;
+        }
+
+        let id = seg
+            .get("data")
+            .and_then(|d| d.get("id"))
+            .and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(s.trim().to_string())
+                } else if let Some(n) = v.as_i64() {
+                    Some(n.to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty());
+
+        let Some(id) = id else {
+            out.push(seg.clone());
+            continue;
+        };
+
+        let Some(name) = qq_face::name_for_id(&id) else {
+            out.push(seg.clone());
+            continue;
+        };
+
+        let mut next = seg.clone();
+        if let Some(obj) = next
+            .get_mut("data")
+            .and_then(|d| d.as_object_mut())
+        {
+            obj.insert("name".to_string(), Value::String(name.to_string()));
+        }
+        out.push(next);
+    }
+
+    Value::Array(out)
 }
 
 fn extract_command_line(
@@ -271,6 +322,7 @@ async fn handle_message(
 
         // If the message is replying to another message, fetch the replied content so plugins can use it.
         let reply_message = reply::get_reply_message_content(runtime, bot_id, group_id, &event).await;
+        let message_segments = decorate_message_segments_for_plugins(event.get("message"));
 
         // 调用插件 preMessage 钩子（包括白名单过滤等）
         let pre_msg_ctx = json!({
@@ -285,7 +337,7 @@ async fn handle_message(
             "message_type": message_type,
             "raw_message": raw_message.as_str(),
             "message_id": event.get("message_id").cloned().unwrap_or(Value::Null),
-            "message": event.get("message").cloned().unwrap_or(Value::Null),
+            "message": message_segments.clone(),
             "reply_message": reply_message.as_ref(),
             "is_admin": is_admin,
             "is_super_admin": is_super_admin,
@@ -357,7 +409,7 @@ async fn handle_message(
                 "command_is_alias": cmd_name != command.name,
                 "args": args,
                 "raw_message": raw_message.as_str(),
-                "message": event.get("message"),
+                "message": message_segments.clone(),
                 "reply_message": reply_message.as_ref(),
                 "is_admin": is_admin,
                 "is_super_admin": is_super_admin,
@@ -384,7 +436,7 @@ async fn handle_message(
                     command_used: cmd_name,
                     args: &args,
                     raw_message: Some(raw_message.as_str()),
-                    message: event.get("message"),
+                    message: Some(&message_segments),
                     reply_message: reply_message.as_ref(),
                 },
             )

@@ -10,6 +10,7 @@ mod module;
 mod persistence;
 mod plugin;
 mod plugin_handlers;
+pub mod qq_face;
 mod render_image;
 mod task;
 mod tool;
