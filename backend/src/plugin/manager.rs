@@ -480,14 +480,87 @@ fn plugin_priority(plugin_id: &str) -> i32 {
     }
 }
 
+#[derive(Clone)]
+struct LoadedPluginMeta {
+    plugin_id: String,
+    plugin_root: String,
+    entry: String,
+    code_type: PluginCodeType,
+    config: serde_json::Value,
+}
+
+struct LoadedPluginRuntime {
+    meta: LoadedPluginMeta,
+    runtime: PluginRuntime,
+}
+
 /// 插件工作线程
 async fn plugin_worker(
     mut rx: mpsc::Receiver<PluginRequest>,
     loaded: Arc<DashMap<String, ()>>,
     data_dir: String,
 ) {
-    let mut runtimes: std::collections::HashMap<String, PluginRuntime> =
+    let mut runtimes: std::collections::HashMap<String, LoadedPluginRuntime> =
         std::collections::HashMap::new();
+    // NOTE: V8 requires isolates to be dropped in reverse order of creation.
+    // We keep a creation-order stack and perform LIFO unload/reload to avoid aborts when disabling plugins.
+    let mut load_stack: Vec<String> = Vec::new();
+
+    async fn load_one(
+        runtimes: &mut std::collections::HashMap<String, LoadedPluginRuntime>,
+        load_stack: &mut Vec<String>,
+        loaded: &DashMap<String, ()>,
+        data_dir: &str,
+        meta: LoadedPluginMeta,
+    ) -> Result<(), String> {
+        if runtimes.contains_key(&meta.plugin_id) {
+            return Ok(());
+        }
+        let plugin_id = meta.plugin_id.clone();
+        let mut runtime =
+            PluginRuntime::new(&plugin_id, meta.config.clone(), data_dir, &meta.plugin_root)?;
+        runtime.load_plugin(&meta.entry, meta.code_type).await?;
+        runtimes.insert(
+            plugin_id.clone(),
+            LoadedPluginRuntime {
+                meta,
+                runtime,
+            },
+        );
+        loaded.insert(plugin_id.clone(), ());
+        load_stack.push(plugin_id.clone());
+        info!("插件 {} 已加载", plugin_id);
+        Ok(())
+    }
+
+    async fn unload_last(
+        runtimes: &mut std::collections::HashMap<String, LoadedPluginRuntime>,
+        load_stack: &mut Vec<String>,
+        loaded: &DashMap<String, ()>,
+        plugin_id: &str,
+    ) -> Result<LoadedPluginMeta, String> {
+        let last = load_stack
+            .last()
+            .map(|s| s.as_str())
+            .ok_or_else(|| "插件栈为空".to_string())?;
+        if last != plugin_id {
+            return Err(format!(
+                "插件 {} 不是最后加载的插件（last={}）",
+                plugin_id, last
+            ));
+        }
+        load_stack.pop();
+        if let Some(mut entry) = runtimes.remove(plugin_id) {
+            if let Err(e) = entry.runtime.on_disable().await {
+                tracing::warn!("插件 {} onDisable 失败: {}", plugin_id, e);
+            }
+            loaded.remove(plugin_id);
+            info!("插件 {} 已卸载", plugin_id);
+            Ok(entry.meta)
+        } else {
+            Err(format!("插件 {} 未加载", plugin_id))
+        }
+    }
 
     while let Some(req) = rx.recv().await {
         match req {
@@ -499,15 +572,20 @@ async fn plugin_worker(
                 config,
                 respond,
             } => {
-                let data_dir = data_dir.clone();
-                let result = async {
-                    let mut runtime = PluginRuntime::new(&plugin_id, config, &data_dir, &plugin_root)?;
-                    runtime.load_plugin(&entry, code_type).await?;
-                    runtimes.insert(plugin_id.clone(), runtime);
-                    loaded.insert(plugin_id.clone(), ());
-                    info!("插件 {} 已加载", plugin_id);
-                    Ok(())
-                }
+                let meta = LoadedPluginMeta {
+                    plugin_id,
+                    plugin_root,
+                    entry,
+                    code_type,
+                    config,
+                };
+                let result = load_one(
+                    &mut runtimes,
+                    &mut load_stack,
+                    &loaded,
+                    &data_dir,
+                    meta,
+                )
                 .await;
                 let _ = respond.send(result);
             }
@@ -517,8 +595,9 @@ async fn plugin_worker(
                 respond,
             } => {
                 let result = async {
-                    if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                        runtime.update_config(config).await?;
+                    if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                        entry.runtime.update_config(config.clone()).await?;
+                        entry.meta.config = config;
                         Ok(())
                     } else {
                         Err(format!("插件 {} 未加载", plugin_id))
@@ -529,16 +608,68 @@ async fn plugin_worker(
             }
             PluginRequest::Unload { plugin_id, respond } => {
                 let result = async {
-                    if let Some(mut runtime) = runtimes.remove(&plugin_id) {
-                        if let Err(e) = runtime.on_disable().await {
-                            tracing::warn!("插件 {} onDisable 失败: {}", plugin_id, e);
-                        }
-                        loaded.remove(&plugin_id);
-                        info!("插件 {} 已卸载", plugin_id);
-                        Ok(())
-                    } else {
-                        Err(format!("插件 {} 未加载", plugin_id))
+                    if !runtimes.contains_key(&plugin_id) {
+                        return Err(format!("插件 {} 未加载", plugin_id));
                     }
+
+                    // Enforce reverse-drop order required by V8 isolates.
+                    // If unloading a non-top plugin, temporarily unload plugins above it (LIFO),
+                    // unload the target, then reload the temporarily-unloaded plugins.
+                    let pos = match load_stack.iter().position(|id| id == &plugin_id) {
+                        Some(p) => p,
+                        None => {
+                            // Fallback: treat as loaded but not tracked; try direct unload (best-effort).
+                            if let Some(mut entry) = runtimes.remove(&plugin_id) {
+                                if let Err(e) = entry.runtime.on_disable().await {
+                                    tracing::warn!("插件 {} onDisable 失败: {}", plugin_id, e);
+                                }
+                                loaded.remove(&plugin_id);
+                                info!("插件 {} 已卸载", plugin_id);
+                                return Ok(());
+                            }
+                            return Err(format!("插件 {} 未加载", plugin_id));
+                        }
+                    };
+
+                    let above_ids: Vec<String> = load_stack
+                        .iter()
+                        .skip(pos + 1)
+                        .cloned()
+                        .collect();
+                    let mut reload_metas: Vec<LoadedPluginMeta> = Vec::new();
+                    for id in &above_ids {
+                        if let Some(entry) = runtimes.get(id) {
+                            reload_metas.push(entry.meta.clone());
+                        }
+                    }
+
+                    for id in above_ids.iter().rev() {
+                        // Best-effort: if this fails, continue to avoid leaving the process in a bad state.
+                        let _ = unload_last(&mut runtimes, &mut load_stack, &loaded, id).await;
+                    }
+
+                    // Now the target should be the top of the stack.
+                    let _ = unload_last(&mut runtimes, &mut load_stack, &loaded, &plugin_id).await;
+
+                    for meta in reload_metas {
+                        if let Err(e) = load_one(
+                            &mut runtimes,
+                            &mut load_stack,
+                            &loaded,
+                            &data_dir,
+                            meta.clone(),
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                "插件 {} 重新加载失败（已暂时卸载，需手动重启恢复）: {}",
+                                meta.plugin_id,
+                                e
+                            );
+                        }
+                    }
+
+                    Ok(())
                 }
                 .await;
                 let _ = respond.send(result);
@@ -548,8 +679,8 @@ async fn plugin_worker(
                 ctx,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    match runtime.pre_command(&ctx).await {
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    match entry.runtime.pre_command(&ctx).await {
                         Ok((allow, outputs)) => HookResult {
                             allow,
                             outputs: outputs
@@ -581,8 +712,8 @@ async fn plugin_worker(
                 ctx,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    match runtime.pre_message(&ctx).await {
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    match entry.runtime.pre_message(&ctx).await {
                         Ok((allow, outputs)) => HookResult {
                             allow,
                             outputs: outputs
@@ -614,8 +745,8 @@ async fn plugin_worker(
                 ctx,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    runtime.on_command(&ctx).await
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    entry.runtime.on_command(&ctx).await
                 } else {
                     Err(format!("插件 {} 未加载", plugin_id))
                 };
@@ -626,8 +757,8 @@ async fn plugin_worker(
                 ctx,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    match runtime.on_notice(&ctx).await {
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    match entry.runtime.on_notice(&ctx).await {
                         Ok((allow, outputs)) => HookResult {
                             allow,
                             outputs: outputs
@@ -659,8 +790,8 @@ async fn plugin_worker(
                 ctx,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    match runtime.on_meta_event(&ctx).await {
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    match entry.runtime.on_meta_event(&ctx).await {
                         Ok((allow, outputs)) => HookResult {
                             allow,
                             outputs: outputs
@@ -694,8 +825,10 @@ async fn plugin_worker(
                 content,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    runtime.on_llm_response(&request_id, success, &content).await
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    entry.runtime
+                        .on_llm_response(&request_id, success, &content)
+                        .await
                 } else {
                     Err(format!("插件 {} 未加载", plugin_id))
                 };
@@ -709,8 +842,8 @@ async fn plugin_worker(
                 data,
                 respond,
             } => {
-                let result = if let Some(runtime) = runtimes.get_mut(&plugin_id) {
-                    runtime
+                let result = if let Some(entry) = runtimes.get_mut(&plugin_id) {
+                    entry.runtime
                         .on_group_info_response(&request_id, &info_type, success, &data)
                         .await
                 } else {
@@ -719,5 +852,10 @@ async fn plugin_worker(
                 let _ = respond.send(result);
             }
         }
+    }
+
+    // Channel closed: best-effort unload in reverse creation order to satisfy V8 isolate drop rules.
+    while let Some(id) = load_stack.last().cloned() {
+        let _ = unload_last(&mut runtimes, &mut load_stack, &loaded, &id).await;
     }
 }
