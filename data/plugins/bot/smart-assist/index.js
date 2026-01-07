@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.23
+ * nBot Smart Assistant Plugin v2.2.24
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (single-line, low-noise)
  *
@@ -1184,8 +1184,7 @@ function handleDecisionResult(requestInfo, success, content) {
   const parsed = parseDecision(content);
 
   const needsFormatRetry =
-    (parsed.reason === "non_json" || parsed.reason === "direct" || String(parsed.reason || "").startsWith("heuristic_")) &&
-    !requestInfo.formatRetry;
+    (parsed.reason === "non_json" || String(parsed.reason || "").startsWith("heuristic_")) && !requestInfo.formatRetry;
 
   // If the model didn't follow the strict JSON format (including plain YES/NO), retry once with a stronger instruction.
   if (needsFormatRetry) {
@@ -1498,7 +1497,7 @@ function cleanupStaleRequests(config) {
 // Plugin object
 return {
   onEnable() {
-  nbot.log.info("Smart Assistant Plugin v2.2.23 enabled");
+  nbot.log.info("Smart Assistant Plugin v2.2.24 enabled");
   },
 
   onDisable() {
