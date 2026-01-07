@@ -1,7 +1,7 @@
 /**
- * nBot Smart Assistant Plugin v2.2.24
+ * nBot Smart Assistant Plugin v2.2.25
  * Auto-detects if user needs help, enters multi-turn conversation mode,
- * replies in a QQ-friendly style (single-line, low-noise)
+ * replies in a QQ-friendly style (short, low-noise)
  *
  * Features:
  * 1. Decision model: Monitors each message, strictly judges if user needs help
@@ -117,6 +117,7 @@ function getConfig() {
       "",
       "输出要求（硬性）：",
       "- 只输出【一行】中文短句；禁止换行；禁止 Markdown/列表/编号/加粗/代码块。",
+      "- 每条消息不超过 20 字；如果必须分多条，用「||」分隔成 2~3 条（仍然同一行输出）。",
       "- 语气自然像群友：别写长段落、别客服腔、别“为了更好地帮助你…”。",
       "- 最多问 1 个关键追问；否则直接给一个最可能有效的下一步。",
       "- 禁止笼统套话（如“各有优缺点/取决于情况/看需求/因人而异”）。不确定就问 1 个能推进问题的关键点。",
@@ -156,7 +157,9 @@ function getConfig() {
       return Math.max(5, Math.min(100, Math.floor(v)));
     })(),
     // Keep formatting limits internal; don't rely on config for behavior.
-    replyMaxChars: 80,
+    replyMaxChars: 20,
+    replyMaxParts: 3,
+    replyPartsSeparator: "||",
   };
 }
 
@@ -923,7 +926,7 @@ function buildReplyContextForPrompt(groupContext, userId) {
   return contextInfo.trim();
 }
 
-function formatOneLinePlain(text, maxChars = 160) {
+function formatOneLinePlain(text) {
   let s = String(text || "");
   if (!s) return "";
 
@@ -958,29 +961,62 @@ function formatOneLinePlain(text, maxChars = 160) {
   s = s.replace(/^(?:你好|您好|哈喽|嗨|在吗|在不在)\s*[!！。]?\s*/u, "");
   // Drop leading "某某: " quoting style (avoid parroting chat logs).
   s = s.replace(/^[^\s]{1,12}\s*[:：]\s*/u, "");
-
-  // Prefer the first helpful sentence when output is overly long.
-  if (s.length > maxChars) {
-    // Avoid returning just a greeting.
-    const cutCandidates = ["。", "！", "？", "!", "?", "；", ";"];
-    let cutAt = -1;
-    for (const p of cutCandidates) {
-      const idx = s.indexOf(p);
-      if (idx !== -1) {
-        cutAt = idx + 1;
-        // If the first sentence is too short, keep searching.
-        if (cutAt >= 10) break;
-      }
-    }
-    if (cutAt !== -1 && cutAt <= maxChars) {
-      s = s.slice(0, cutAt).trim();
-    }
-  }
-
-  if (s.length > maxChars) {
-    s = s.slice(0, maxChars).trimEnd();
-  }
   return s;
+}
+
+function splitQqReply(text, maxChars, maxParts, sep = "||") {
+  const s = String(text || "").trim();
+  if (!s) return { parts: [], overflow: false };
+
+  const normalized = s.replace(/\s*\|\|\s*/g, "||");
+  const rawParts =
+    normalized.includes("||") ?
+      normalized
+        .split("||")
+        .map((p) => p.trim())
+        .filter(Boolean)
+    : [normalized];
+
+  const parts = [];
+  let overflow = false;
+  const hardMaxChars = Math.max(8, Number(maxChars) || 20);
+  const hardMaxParts = Math.max(1, Number(maxParts) || 3);
+
+  const findCutIndex = (chunk) => {
+    const window = chunk.slice(0, hardMaxChars + 1);
+    const minGood = Math.max(8, Math.floor(hardMaxChars * 0.6));
+    const candidates = ["。", "！", "？", "!", "?", "；", ";", "，", ",", "、", " "];
+    let best = -1;
+    for (const p of candidates) {
+      const idx = window.lastIndexOf(p);
+      if (idx >= minGood) best = Math.max(best, idx + 1);
+    }
+    if (best > 0) return best;
+    return hardMaxChars;
+  };
+
+  for (const part of rawParts) {
+    let rest = String(part || "").replace(/\s+/g, " ").trim();
+    while (rest.length > hardMaxChars) {
+      if (parts.length >= hardMaxParts) {
+        overflow = true;
+        return { parts, overflow };
+      }
+      const cut = findCutIndex(rest);
+      const head = rest.slice(0, cut).trim();
+      if (head) parts.push(head);
+      rest = rest.slice(cut).trim();
+    }
+    if (rest) {
+      if (parts.length >= hardMaxParts) {
+        overflow = true;
+        return { parts, overflow };
+      }
+      parts.push(rest);
+    }
+  }
+
+  return { parts, overflow };
 }
 
 // Call reply model
@@ -1337,10 +1373,9 @@ function handleReplyResult(requestInfo, success, content) {
   // Add assistant reply to session
   let cleaned = formatOneLinePlain(
     raw
-    .replace(/\s+@(?:群主|管理员|全体|all|everyone|here)\b/g, "")
-    .replace(/^(?:@(?:群主|管理员|全体|all|everyone|here)\b\s*)+/g, "")
-    .trim(),
-    config.replyMaxChars
+      .replace(/\s+@(?:群主|管理员|全体|all|everyone|here)\b/g, "")
+      .replace(/^(?:@(?:群主|管理员|全体|all|everyone|here)\b\s*)+/g, "")
+      .trim()
   );
   if (/[\u0000-\u001F\u007F]/.test(cleaned)) {
     cleaned = cleaned.replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim();
@@ -1374,12 +1409,51 @@ function handleReplyResult(requestInfo, success, content) {
     });
     return;
   }
-  if (cleaned.length <= 8 || cleaned.length >= config.replyMaxChars - 2) {
+
+  const splitResult = splitQqReply(
+    cleaned,
+    config.replyMaxChars,
+    config.replyMaxParts,
+    config.replyPartsSeparator
+  );
+  if (splitResult.overflow && !requestInfo.compactRetry) {
+    // Ask the model to compress/split properly instead of hard-truncating.
+    pendingReplySessions.add(sessionKey);
+    const requestId = genRequestId("reply");
+    pendingRequests.set(requestId, {
+      requestId,
+      type: "reply",
+      sessionKey,
+      createdAt: nbot.now(),
+      modelName: config.replyModel,
+      maxTokens: REPLY_RETRY_MAX_TOKENS,
+      compactRetry: true,
+    });
+
+    const retryMessages = [
+      {
+        role: "system",
+        content:
+          config.replySystemPrompt +
+          `\n\n补充要求：你的上一条输出过长；请用「||」分成不超过 ${config.replyMaxParts} 条，每条不超过 ${config.replyMaxChars} 字；不要编号、不要换行、不要 Markdown。`,
+      },
+      ...session.messages,
+    ];
+
+    nbot.callLlmChat(requestId, retryMessages, {
+      modelName: config.replyModel,
+      maxTokens: REPLY_RETRY_MAX_TOKENS,
+    });
+    return;
+  }
+
+  const parts = splitResult.parts.length ? splitResult.parts : [cleaned];
+  if (cleaned.length <= 12 || parts.length > 1) {
     nbot.log.info(
-      `[smart-assist] reply_cleaned len=${cleaned.length}/${config.replyMaxChars} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} rawLen=${rawLen} rid=${String(requestInfo.requestId || "").slice(0, 48)} cleaned=${escapeForLog(cleaned, 160)} raw=${escapeForLog(raw, 500)}`
+      `[smart-assist] reply_cleaned len=${cleaned.length} parts=${parts.length}/${config.replyMaxParts} maxChars=${config.replyMaxChars} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} rawLen=${rawLen} rid=${String(requestInfo.requestId || "").slice(0, 48)} cleaned=${escapeForLog(cleaned, 180)} raw=${escapeForLog(raw, 500)}`
     );
   }
-  addMessageToSession(session, "assistant", cleaned);
+  addMessageToSession(session, "assistant", parts.join(" "));
   session.turnCount++;
 
   // Send reply (hide counters; keep session limits internal)
@@ -1388,7 +1462,10 @@ function handleReplyResult(requestInfo, success, content) {
     prefix = nbot.at(session.userId) ? `${nbot.at(session.userId)} ` : "";
     session.mentionUserOnFirstReply = false;
   }
-  nbot.sendReply(session.userId, session.groupId || 0, `${prefix}${cleaned}`);
+  parts.forEach((p, idx) => {
+    const msg = idx === 0 ? `${prefix}${p}` : p;
+    if (msg) nbot.sendReply(session.userId, session.groupId || 0, msg);
+  });
 
   // Check if max turns reached (silent end; avoid spamming in QQ group)
   if (session.turnCount >= config.maxTurns) {

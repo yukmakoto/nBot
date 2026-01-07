@@ -4,6 +4,7 @@ use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::bot::runtime::api::send_reply;
@@ -69,6 +70,29 @@ impl std::fmt::Display for LlmCallError {
             LlmCallError::MissingContent => write!(f, "分析失败：无法获取回复内容"),
         }
     }
+}
+
+fn parse_retry_after_seconds_from_message(message: &str) -> Option<u64> {
+    let lower = message.to_lowercase();
+    let after_idx = lower.find("after")?;
+    let tail = &lower[after_idx + "after".len()..];
+    let digits: String = tail
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u64>().ok()
+}
+
+fn parse_retry_after_seconds_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn should_retry_llm_http_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 #[derive(Debug, Clone)]
@@ -578,60 +602,107 @@ pub(in super::super::super) async fn call_chat_completions(
         });
     }
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .body(request_bytes)
-        .timeout(std::time::Duration::from_secs(180))
-        .send()
-        .await
-        .map_err(|e| LlmCallError::Transport(e.to_string()))?;
+    let timeout = std::time::Duration::from_secs(180);
+    let max_attempts: usize = 3;
 
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+    for attempt in 0..max_attempts {
+        let resp = match client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .body(request_bytes.clone())
+            .timeout(timeout)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let err = LlmCallError::Transport(e.to_string());
+                if attempt + 1 >= max_attempts {
+                    return Err(err);
+                }
+                let delay_ms = 300_u64
+                    .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                    .min(3000);
+                warn!("LLM request failed, retrying in {}ms: {}", delay_ms, err);
+                sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
+            }
+        };
 
-    if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .cloned()
-                    .or_else(|| v.get("message").cloned())
-            })
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| text.chars().take(400).collect());
-        return Err(LlmCallError::Http {
-            status: status.as_u16(),
-            message: msg,
-        });
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+
+        if !status.is_success() {
+            let msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .cloned()
+                        .or_else(|| v.get("message").cloned())
+                })
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| text.chars().take(400).collect());
+
+            let http_status = status.as_u16();
+            let err = LlmCallError::Http {
+                status: http_status,
+                message: msg.clone(),
+            };
+
+            if attempt + 1 < max_attempts && should_retry_llm_http_status(http_status) {
+                let mut delay_ms = 500_u64
+                    .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                    .min(5000);
+                if http_status == 429 {
+                    let mut delay_secs = parse_retry_after_seconds_from_headers(&headers)
+                        .or_else(|| parse_retry_after_seconds_from_message(&msg))
+                        .unwrap_or(1);
+                    delay_secs = delay_secs.clamp(1, 60);
+                    delay_ms = delay_secs.saturating_mul(1000);
+                }
+                warn!(
+                    "LLM HTTP {}, retrying in {}ms: {}",
+                    http_status,
+                    delay_ms,
+                    compact_for_log(&msg, 140)
+                );
+                sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
+            }
+
+            return Err(err);
+        }
+
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| LlmCallError::Parse(e.to_string()))?;
+        let content = extract_chat_content(&v).ok_or(LlmCallError::MissingContent)?;
+
+        // Debug suspiciously short outputs: print a compact preview of the raw response (redacted).
+        let trimmed = content.trim();
+        if trimmed.chars().count() <= 6 && text.len() > 200 {
+            let finish_reason = v
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("finish_reason"))
+                .and_then(|f| f.as_str())
+                .unwrap_or("");
+            warn!(
+                "LLM short content (len={} finish_reason={}): raw={}",
+                trimmed.chars().count(),
+                finish_reason,
+                compact_for_log(&text, 700)
+            );
+        }
+
+        return Ok(content);
     }
 
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| LlmCallError::Parse(e.to_string()))?;
-    let content = extract_chat_content(&v).ok_or(LlmCallError::MissingContent)?;
-
-    // Debug suspiciously short outputs: print a compact preview of the raw response (redacted).
-    let trimmed = content.trim();
-    if trimmed.chars().count() <= 6 && text.len() > 200 {
-        let finish_reason = v
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("finish_reason"))
-            .and_then(|f| f.as_str())
-            .unwrap_or("");
-        warn!(
-            "LLM short content (len={} finish_reason={}): raw={}",
-            trimmed.chars().count(),
-            finish_reason,
-            compact_for_log(&text, 700)
-        );
-    }
-
-    Ok(content)
+    Err(LlmCallError::Transport("LLM 重试失败".to_string()))
 }
 
 /// Tavily 搜索工具定义
@@ -770,47 +841,95 @@ pub(in super::super::super) async fn call_chat_completions_with_tavily(
         });
     }
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .body(request_bytes)
-        .timeout(std::time::Duration::from_secs(300))
-        .send()
-        .await
-        .map_err(|e| LlmCallError::Transport(e.to_string()))?;
+    let timeout = std::time::Duration::from_secs(300);
+    let max_attempts: usize = 3;
 
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+    for attempt in 0..max_attempts {
+        let resp = match client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .body(request_bytes.clone())
+            .timeout(timeout)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let err = LlmCallError::Transport(e.to_string());
+                if attempt + 1 >= max_attempts {
+                    return Err(err);
+                }
+                let delay_ms = 300_u64
+                    .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                    .min(3000);
+                warn!("LLM request failed, retrying in {}ms: {}", delay_ms, err);
+                sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
+            }
+        };
 
-    if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .cloned()
-                    .or_else(|| v.get("message").cloned())
-            })
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| text.chars().take(400).collect());
-        return Err(LlmCallError::Http {
-            status: status.as_u16(),
-            message: msg,
-        });
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+
+        if !status.is_success() {
+            let msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .cloned()
+                        .or_else(|| v.get("message").cloned())
+                })
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| text.chars().take(400).collect());
+
+            let http_status = status.as_u16();
+            let err = LlmCallError::Http {
+                status: http_status,
+                message: msg.clone(),
+            };
+
+            if attempt + 1 < max_attempts && should_retry_llm_http_status(http_status) {
+                let mut delay_ms = 500_u64
+                    .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                    .min(5000);
+                if http_status == 429 {
+                    let mut delay_secs = parse_retry_after_seconds_from_headers(&headers)
+                        .or_else(|| parse_retry_after_seconds_from_message(&msg))
+                        .unwrap_or(1);
+                    delay_secs = delay_secs.clamp(1, 60);
+                    delay_ms = delay_secs.saturating_mul(1000);
+                }
+                warn!(
+                    "LLM HTTP {}, retrying in {}ms: {}",
+                    http_status,
+                    delay_ms,
+                    msg.chars().take(140).collect::<String>()
+                );
+                sleep(std::time::Duration::from_millis(delay_ms)).await;
+                continue;
+            }
+
+            return Err(err);
+        }
+
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| LlmCallError::Parse(e.to_string()))?;
+        return v
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
+            .ok_or(LlmCallError::MissingContent);
     }
 
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| LlmCallError::Parse(e.to_string()))?;
-    v.get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string())
-        .ok_or(LlmCallError::MissingContent)
+    Err(LlmCallError::Transport("LLM 重试失败".to_string()))
 }
 
 /// 使用 Tavily 工具的循环调用
@@ -857,37 +976,88 @@ async fn call_with_tavily_tool_loop(
             });
         }
 
-        let resp = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .body(request_bytes)
-            .timeout(std::time::Duration::from_secs(180))
-            .send()
-            .await
-            .map_err(|e| LlmCallError::Transport(e.to_string()))?;
+        let timeout = std::time::Duration::from_secs(180);
+        let max_attempts: usize = 3;
+        let mut ok_text: Option<String> = None;
 
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+        for attempt in 0..max_attempts {
+            let resp = match client
+                .post(url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .body(request_bytes.clone())
+                .timeout(timeout)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let err = LlmCallError::Transport(e.to_string());
+                    if attempt + 1 >= max_attempts {
+                        return Err(err);
+                    }
+                    let delay_ms = 300_u64
+                        .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                        .min(3000);
+                    warn!("LLM request failed, retrying in {}ms: {}", delay_ms, err);
+                    sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
+                }
+            };
 
-        if !status.is_success() {
-            let msg = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|v| {
-                    v.get("error")
-                        .cloned()
-                        .or_else(|| v.get("message").cloned())
-                })
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| text.chars().take(400).collect());
-            return Err(LlmCallError::Http {
-                status: status.as_u16(),
-                message: msg,
-            });
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| LlmCallError::Decode(e.to_string()))?;
+
+            if !status.is_success() {
+                let msg = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("error")
+                            .cloned()
+                            .or_else(|| v.get("message").cloned())
+                    })
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| text.chars().take(400).collect());
+
+                let http_status = status.as_u16();
+                if attempt + 1 < max_attempts && should_retry_llm_http_status(http_status) {
+                    let mut delay_ms = 500_u64
+                        .saturating_mul(2_u64.saturating_pow(attempt as u32))
+                        .min(5000);
+                    if http_status == 429 {
+                        let mut delay_secs = parse_retry_after_seconds_from_headers(&headers)
+                            .or_else(|| parse_retry_after_seconds_from_message(&msg))
+                            .unwrap_or(1);
+                        delay_secs = delay_secs.clamp(1, 60);
+                        delay_ms = delay_secs.saturating_mul(1000);
+                    }
+                    warn!(
+                        "LLM HTTP {}, retrying in {}ms: {}",
+                        http_status,
+                        delay_ms,
+                        msg.chars().take(140).collect::<String>()
+                    );
+                    sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
+                }
+
+                return Err(LlmCallError::Http {
+                    status: http_status,
+                    message: msg,
+                });
+            }
+
+            ok_text = Some(text);
+            break;
         }
+
+        let Some(text) = ok_text else {
+            return Err(LlmCallError::Transport("LLM 重试失败".to_string()));
+        };
 
         let v: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| LlmCallError::Parse(e.to_string()))?;
