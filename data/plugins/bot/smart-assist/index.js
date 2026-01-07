@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.21
+ * nBot Smart Assistant Plugin v2.2.22
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (single-line, low-noise)
  *
@@ -820,6 +820,7 @@ function callDecisionModel(sessionKey, userId, groupId, message, mentioned, item
   const requestId = genRequestId("decision");
   pendingDecisionSessions.add(sessionKey);
   pendingRequests.set(requestId, {
+    requestId,
     type: "decision",
     sessionKey,
     userId,
@@ -1029,6 +1030,7 @@ function callReplyModel(session, sessionKey, config, useSearch = false) {
 
   const usedImages = messages.some((m) => Array.isArray(m?.content) && m.content.some((p) => p && p.type === "image_url"));
   pendingRequests.set(requestId, {
+    requestId,
     type: "reply",
     sessionKey,
     createdAt: nbot.now(),
@@ -1176,15 +1178,23 @@ function handleDecisionResult(requestInfo, success, content) {
   const existing = sessions.get(sessionKey);
   const parsed = parseDecision(content);
 
-  // If the model didn't follow the strict JSON format, retry once with a stronger instruction.
-  if (parsed.reason === "non_json" && !requestInfo.formatRetry) {
+  const needsFormatRetry =
+    (parsed.reason === "non_json" || parsed.reason === "direct" || String(parsed.reason || "").startsWith("heuristic_")) &&
+    !requestInfo.formatRetry;
+
+  // If the model didn't follow the strict JSON format (including plain YES/NO), retry once with a stronger instruction.
+  if (needsFormatRetry) {
     const stronger = [
       config.decisionSystemPrompt,
       "",
       "你上一条输出不符合格式。再次强调：只允许输出单行 JSON，且必须以 { 开头、以 } 结尾；除此之外禁止任何字符。",
+      "禁止输出 YES/NO/OK/好的 等单词；如果你想表达“要/不要介入”，也必须写进 JSON 的 action 字段。",
       "示例：{\"action\":\"IGNORE\",\"confidence\":0.0,\"reason\":\"不确定\",\"use_search\":false,\"topic\":\"\",\"need_clarify\":false}",
     ].join("\n");
 
+    nbot.log.info(
+      `[smart-assist] decision format retry reason=${parsed.reason || "-"} rid=${String(requestInfo.requestId || "").slice(0, 48)}`
+    );
     callDecisionModel(
       sessionKey,
       userId,
@@ -1203,7 +1213,7 @@ function handleDecisionResult(requestInfo, success, content) {
   const shouldReply = action === "REPLY";
 
   nbot.log.info(
-    `[smart-assist] action=${action} conf=${parsed.confidence.toFixed(2)} reply=${shouldReply ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} search=${parsed.useSearch ? "Y" : "N"} clarify=${parsed.needClarify ? "Y" : "N"} reason=${parsed.reason || "-"} text=${maskSensitiveForLog(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
+    `[smart-assist] action=${action} conf=${parsed.confidence.toFixed(2)} reply=${shouldReply ? "Y" : "N"} mentioned=${mentioned ? "Y" : "N"} search=${parsed.useSearch ? "Y" : "N"} clarify=${parsed.needClarify ? "Y" : "N"} reason=${parsed.reason || "-"} rid=${String(requestInfo.requestId || "").slice(0, 48)} text=${maskSensitiveForLog(sanitizeMessageForLlm(String(message || ""), null)).slice(0, 80)}`
   );
 
   if (!shouldReply) {
@@ -1288,7 +1298,7 @@ function handleReplyResult(requestInfo, success, content) {
   const hasControl = /[\u0000-\u001F\u007F]/.test(raw);
   if (hasControl || rawLen <= 12) {
     nbot.log.warn(
-      `[smart-assist] reply_raw len=${rawLen} ctl=${hasControl ? "Y" : "N"} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} maxTok=${requestInfo.maxTokens || "-"} raw=${escapeForLog(raw, 500)}`
+      `[smart-assist] reply_raw len=${rawLen} ctl=${hasControl ? "Y" : "N"} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} maxTok=${requestInfo.maxTokens || "-"} rid=${String(requestInfo.requestId || "").slice(0, 48)} raw=${escapeForLog(raw, 500)}`
     );
   }
 
@@ -1299,6 +1309,7 @@ function handleReplyResult(requestInfo, success, content) {
       const requestId = genRequestId("reply");
       const retryMessages = buildReplyMessages(session, sessionKey, config, false);
       pendingRequests.set(requestId, {
+        requestId,
         type: "reply",
         sessionKey,
         createdAt: nbot.now(),
@@ -1335,6 +1346,7 @@ function handleReplyResult(requestInfo, success, content) {
     pendingReplySessions.add(sessionKey);
     const requestId = genRequestId("reply");
     pendingRequests.set(requestId, {
+      requestId,
       type: "reply",
       sessionKey,
       createdAt: nbot.now(),
@@ -1360,7 +1372,7 @@ function handleReplyResult(requestInfo, success, content) {
   }
   if (cleaned.length <= 8 || cleaned.length >= config.replyMaxChars - 2) {
     nbot.log.info(
-      `[smart-assist] reply_cleaned len=${cleaned.length}/${config.replyMaxChars} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} rawLen=${rawLen} cleaned=${escapeForLog(cleaned, 160)} raw=${escapeForLog(raw, 500)}`
+      `[smart-assist] reply_cleaned len=${cleaned.length}/${config.replyMaxChars} usedImages=${requestInfo.usedImages ? "Y" : "N"} model=${requestInfo.modelName || "-"} rawLen=${rawLen} rid=${String(requestInfo.requestId || "").slice(0, 48)} cleaned=${escapeForLog(cleaned, 160)} raw=${escapeForLog(raw, 500)}`
     );
   }
   addMessageToSession(session, "assistant", cleaned);
