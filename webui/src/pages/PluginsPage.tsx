@@ -188,7 +188,11 @@ function InstalledRow({ plugin, onConfig }: { plugin: InstalledPlugin; onConfig:
     setBusy('toggle');
     try {
       const action = enabled ? 'disable' : 'enable';
-      await api.post(`/plugins/${encodeURIComponent(plugin.manifest.id)}/${action}`);
+      const resp = await api.post(`/plugins/${encodeURIComponent(plugin.manifest.id)}/${action}`);
+      if (resp.data?.status !== 'success') {
+        toast.error(resp.data?.message ?? '操作失败');
+        return;
+      }
       toast.success(enabled ? '已禁用插件' : '已启用插件');
       await queryClient.invalidateQueries({ queryKey: ['plugins-installed'] });
     } catch (e: unknown) {
@@ -203,7 +207,11 @@ function InstalledRow({ plugin, onConfig }: { plugin: InstalledPlugin; onConfig:
     if (!confirm(`确认卸载插件：${plugin.manifest.name}（${plugin.manifest.id}）？`)) return;
     setBusy('uninstall');
     try {
-      await api.delete(`/plugins/${encodeURIComponent(plugin.manifest.id)}`);
+      const resp = await api.delete(`/plugins/${encodeURIComponent(plugin.manifest.id)}`);
+      if (resp.data?.status !== 'success') {
+        toast.error(resp.data?.message ?? '卸载失败');
+        return;
+      }
       toast.success('已卸载插件');
       await queryClient.invalidateQueries({ queryKey: ['plugins-installed'] });
     } catch (e: unknown) {
@@ -286,7 +294,11 @@ function MarketRow({ plugin, isModule }: { plugin: MarketPlugin; isModule: boole
     if (busy) return;
     setBusy(true);
     try {
-      await api.post('/market/install', { plugin_id: plugin.id, source: 'market' });
+      const resp = await api.post('/market/install', { plugin_id: plugin.id, source: 'market' });
+      if (resp.data?.status !== 'success') {
+        toast.error(resp.data?.message ?? '安装失败');
+        return;
+      }
       toast.success('安装成功');
       await queryClient.invalidateQueries({ queryKey: ['plugins-installed'] });
     } catch (e: unknown) {
