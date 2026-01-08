@@ -17,6 +17,10 @@ export function getConfig() {
   const decisionMaxTokens = normalizeMaxTokens(cfg.decision_max_tokens ?? 2048, 2048);
   const replyMaxTokens = normalizeMaxTokens(cfg.reply_max_tokens ?? 2048, 2048);
   const replyRetryMaxTokens = normalizeMaxTokens(cfg.reply_retry_max_tokens ?? 512, 512);
+
+  const mentionUserOnFirstReply = cfg.mention_user_on_first_reply !== false;
+  const mentionUserOnEveryReply = cfg.mention_user_on_every_reply !== false;
+  const alwaysReplyInSession = cfg.always_reply_in_session !== false;
   const decisionSystemPrompt =
     cfg.decision_system_prompt ||
     [
@@ -55,7 +59,9 @@ export function getConfig() {
       "",
       "输出要求（硬性）：",
       "- 只输出【一行】中文短句；禁止换行；禁止 Markdown/列表/编号/加粗/代码块。",
-      "- 每条消息不超过 20 字；优先只输出 1 条；如必须分多条，用「||」分隔成 2~3 条（仍然同一行输出）。每段必须完整且不少于 4 字。",
+      "- 每条消息不超过 20 字；通常输出 2 条，用「||」分隔（仍然同一行）。第 1 条可追问 1 个关键点，第 2 条给可执行步骤；如无需追问，可只输出 1 条步骤。",
+      "- 如果只输出 1 条，必须是「可执行步骤」，不要只问问题。",
+      "- 禁止半句碎片（如“建议先/能/然后”）。",
       "- 语气自然像群友：别写长段落、别客服腔、别“为了更好地帮助你…”。",
       "- 最多问 1 个关键追问；否则直接给一个最可能有效的下一步。",
       "- 禁止笼统套话（如“各有优缺点/取决于情况/看需求/因人而异”）。不确定就问 1 个能推进问题的关键点。",
@@ -101,5 +107,8 @@ export function getConfig() {
     decisionMaxTokens,
     replyMaxTokens,
     replyRetryMaxTokens,
+    mentionUserOnFirstReply,
+    mentionUserOnEveryReply,
+    alwaysReplyInSession,
   };
 }

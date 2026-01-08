@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.26
+ * nBot Smart Assistant Plugin v2.2.27
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (short, low-noise)
  */
@@ -21,15 +21,22 @@ import {
   noteRecentUserVideos,
 } from "./media.js";
 import { sanitizeMessageForLlm, summarizeMentions } from "./message.js";
-import { handleReplyResult } from "./reply/reply.js";
-import { checkCooldown, cleanupExpiredSessions, addMessageToSession, endSession } from "./session.js";
-import { resetAllState, decisionBatches, pendingGroupInfoRequests, pendingRequests, sessions } from "./state.js";
+import { callReplyModel, handleReplyResult } from "./reply/reply.js";
+import { checkCooldown, cleanupExpiredSessions, addMessageToSession, createSession, endSession } from "./session.js";
+import {
+  resetAllState,
+  decisionBatches,
+  pendingGroupInfoRequests,
+  pendingReplySessions,
+  pendingRequests,
+  sessions,
+} from "./state.js";
 import { cleanupStaleRequests } from "./timeouts.js";
 import { containsKeyword } from "./utils/text.js";
 
 export default {
   onEnable() {
-    nbot.log.info("Smart Assistant Plugin v2.2.26 enabled");
+    nbot.log.info("Smart Assistant Plugin v2.2.27 enabled");
   },
 
   onDisable() {
@@ -116,10 +123,20 @@ export default {
           return true;
         }
 
-        // Continue conversation (store context), but do NOT force a reply every turn.
+        // Continue conversation (store context).
         addMessageToSession(session, "user", llmMessage || message);
 
-        // Let the decision model decide whether we should reply to this new message.
+        // In an active session, default to replying every user turn (otherwise it feels "dead").
+        if (config.alwaysReplyInSession) {
+          if (pendingReplySessions.has(sessionKey)) {
+            session.pendingUserInput = true;
+            return true;
+          }
+          callReplyModel(session, sessionKey, config, false);
+          return true;
+        }
+
+        // Fallback: Let the decision model decide whether we should reply to this new message.
         const trigger = getDecisionTrigger(ctx, message, config);
         let batch = decisionBatches.get(sessionKey);
         if (!batch) {
@@ -149,6 +166,24 @@ export default {
       if (replyCtx && !replyCtx.replyToBot && !trigger.mentioned) {
         return true;
       }
+
+      // If user explicitly @ the bot, reply immediately (avoid strict JSON/router failures causing silence).
+      if (trigger.mentioned) {
+        const seed = llmMessage || message || "";
+        const s = createSession(sessionKey, user_id, group_id, seed, {
+          mentionUserOnFirstReply: config.mentionUserOnFirstReply,
+          mentionUserOnEveryReply: config.mentionUserOnEveryReply,
+        });
+        if (replyCtx && replyCtx.snippet) {
+          s.lastReplySnippet = replyCtx.snippet;
+          s.lastReplyAt = nbot.now();
+        }
+        addMessageToSession(s, "user", seed);
+        nbot.log.info("[smart-assist] created new session (mentioned)");
+        callReplyModel(s, sessionKey, config, false);
+        return true;
+      }
+
       const shouldCheck = checkCooldown(sessionKey, config.cooldownMs) && trigger.shouldCheck;
       if (shouldCheck) {
         // Store a sanitized copy for LLM so CQ segments don't mislead the decision model.
@@ -220,4 +255,3 @@ export default {
     handleGroupInfoResponse(requestInfo, infoType, success, data);
   },
 };
-

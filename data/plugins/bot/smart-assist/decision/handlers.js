@@ -220,7 +220,8 @@ export function handleDecisionResult(requestInfo, success, content) {
 
   // Create new session
   const session = createSession(sessionKey, userId, groupId, seedItems[0] || message || "", {
-    mentionUserOnFirstReply: !!mentioned,
+    mentionUserOnFirstReply: config.mentionUserOnFirstReply || !!mentioned,
+    mentionUserOnEveryReply: config.mentionUserOnEveryReply,
   });
   session.groupContext = groupContext || null;
 

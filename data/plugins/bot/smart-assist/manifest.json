@@ -1,7 +1,7 @@
 {
   "id": "smart-assist",
   "name": "智能助手",
-  "version": "2.2.26",
+  "version": "2.2.27",
   "author": "nBot",
   "description": "智能对话助手：自动监控群聊消息并识别求助场景（无需@；@会提高优先级），用 QQ 群友风格的一行短句给出下一步建议；支持引用最近图片/视频/语音等上下文。",
   "type": "bot",
@@ -132,6 +132,39 @@
       "itemType": null,
       "min": 5,
       "max": 100
+    },
+    {
+      "key": "always_reply_in_session",
+      "type": "boolean",
+      "label": "会话内每条都回复",
+      "description": "进入会话后是否默认每条消息都回复（更像正常对话；关闭则由决策模型决定）。",
+      "default": true,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "mention_user_on_first_reply",
+      "type": "boolean",
+      "label": "首条回复@用户",
+      "description": "开始会话时首条回复是否@用户（更容易被看到）。",
+      "default": true,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "key": "mention_user_on_every_reply",
+      "type": "boolean",
+      "label": "每条回复@用户",
+      "description": "会话内每条回复是否@用户（更容易被看到，但更吵）。",
+      "default": true,
+      "options": null,
+      "itemType": null,
+      "min": null,
+      "max": null
     }
   ],
   "config": {
@@ -145,6 +178,9 @@
     "cooldown_seconds": 60,
     "auto_trigger": true,
     "fetch_group_context": true,
-    "context_message_count": 20
+    "context_message_count": 20,
+    "always_reply_in_session": true,
+    "mention_user_on_first_reply": true,
+    "mention_user_on_every_reply": true
   }
 }

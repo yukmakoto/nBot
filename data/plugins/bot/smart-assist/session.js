@@ -53,6 +53,8 @@ export function createSession(sessionKey, userId, groupId, initialMessage, optio
     maxTurns: config.maxTurns,
     groupContext: null, // Will be populated with group announcements and history
     mentionUserOnFirstReply: !!options.mentionUserOnFirstReply,
+    mentionUserOnEveryReply: !!options.mentionUserOnEveryReply,
+    pendingUserInput: false, // User sent new messages while a reply was in-flight
     lastImageUrls: [],
     lastImageAt: 0,
     lastVideoUrls: [],
@@ -94,4 +96,3 @@ export function endSession(sessionKey) {
 
   updateCooldown(sessionKey);
 }
-

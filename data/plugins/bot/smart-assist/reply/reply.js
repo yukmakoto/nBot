@@ -174,6 +174,9 @@ function buildReplyMessages(session, sessionKey, config, attachImages) {
 export function callReplyModel(session, sessionKey, config, useSearch = false) {
   pendingReplySessions.add(sessionKey);
   const requestId = genRequestId("reply");
+  if (session) {
+    session.pendingUserInput = false;
+  }
   const messages = buildReplyMessages(session, sessionKey, config, true);
 
   const usedImages = messages.some((m) => Array.isArray(m?.content) && m.content.some((p) => p && p.type === "image_url"));
@@ -368,9 +371,12 @@ export function handleReplyResult(requestInfo, success, content) {
 
   // Send reply (hide counters; keep session limits internal)
   let prefix = "";
-  if (session.mentionUserOnFirstReply) {
+  const shouldMention = !!session.groupId && (session.mentionUserOnEveryReply || session.mentionUserOnFirstReply);
+  if (shouldMention) {
     prefix = nbot.at(session.userId) ? `${nbot.at(session.userId)} ` : "";
-    session.mentionUserOnFirstReply = false;
+    if (session.mentionUserOnFirstReply) {
+      session.mentionUserOnFirstReply = false;
+    }
   }
   finalParts.forEach((p, idx) => {
     const msg = idx === 0 ? `${prefix}${p}` : p;
@@ -381,5 +387,10 @@ export function handleReplyResult(requestInfo, success, content) {
   if (session.turnCount >= config.maxTurns) {
     endSession(sessionKey);
     return;
+  }
+
+  // If user sent more messages while we were replying, immediately continue.
+  if (session.pendingUserInput && !pendingReplySessions.has(sessionKey)) {
+    callReplyModel(session, sessionKey, config, false);
   }
 }
