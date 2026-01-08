@@ -68,6 +68,13 @@ impl PluginRuntime {
         if path.is_dir() {
             path = path.join("index.js");
         }
+        // `ModuleSpecifier::from_file_path` requires an absolute path; in host mode our plugin root may
+        // be a relative path like `data/plugins/...`.
+        if path.is_relative() {
+            let cwd =
+                std::env::current_dir().map_err(|e| format!("Resolve current dir failed: {e}"))?;
+            path = cwd.join(path);
+        }
         if !path.exists() {
             return Err(format!(
                 "Plugin entry not found: {} (root: {})",
