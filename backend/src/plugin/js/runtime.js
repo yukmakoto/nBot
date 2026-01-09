@@ -342,6 +342,11 @@ globalThis.nbot = {
     return core.ops.op_render_markdown_image(String(title), String(meta), String(markdown), width);
   },
 
+  // Render raw HTML into an image (base64) using core renderer
+  renderHtmlImage: (html, width = 520, quality = 92) => {
+    return core.ops.op_render_html_image(String(html), width, quality);
+  },
+
   // Log functions
   log: {
     info: (msg) => core.ops.op_log("info", String(msg)),
@@ -498,6 +503,7 @@ export const callLlmChatWithSearch = globalThis.nbot.callLlmChatWithSearch;
 export const sendForwardMessage = globalThis.nbot.sendForwardMessage;
 export const httpFetch = globalThis.nbot.httpFetch;
 export const renderMarkdownImage = globalThis.nbot.renderMarkdownImage;
+export const renderHtmlImage = globalThis.nbot.renderHtmlImage;
 export const log = globalThis.nbot.log;
 export const now = globalThis.nbot.now;
 export const getConfig = globalThis.nbot.getConfig;

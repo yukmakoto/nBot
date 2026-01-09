@@ -15,7 +15,7 @@ use super::types::PluginCodeType;
 
 extension!(
     nbot_plugin,
-    ops = [op_send_message, op_send_reply, op_call_api, op_log, op_set_hook_result, op_now, op_get_config, op_set_config, op_storage_set, op_storage_get, op_storage_delete, op_get_plugin_id, op_call_llm_forward, op_call_llm_forward_from_url, op_call_llm_forward_archive_from_url, op_call_llm_forward_image_from_url, op_call_llm_forward_video_from_url, op_call_llm_forward_audio_from_url, op_call_llm_forward_media_bundle, op_call_llm_chat, op_call_llm_chat_with_search, op_send_forward_message, op_http_fetch, op_render_markdown_image, op_fetch_group_notice, op_fetch_group_msg_history, op_fetch_group_files, op_fetch_group_file_url, op_fetch_friend_list, op_fetch_group_list, op_fetch_group_member_list, op_download_file],
+    ops = [op_send_message, op_send_reply, op_call_api, op_log, op_set_hook_result, op_now, op_get_config, op_set_config, op_storage_set, op_storage_get, op_storage_delete, op_get_plugin_id, op_call_llm_forward, op_call_llm_forward_from_url, op_call_llm_forward_archive_from_url, op_call_llm_forward_image_from_url, op_call_llm_forward_video_from_url, op_call_llm_forward_audio_from_url, op_call_llm_forward_media_bundle, op_call_llm_chat, op_call_llm_chat_with_search, op_send_forward_message, op_http_fetch, op_render_markdown_image, op_render_html_image, op_fetch_group_notice, op_fetch_group_msg_history, op_fetch_group_files, op_fetch_group_file_url, op_fetch_friend_list, op_fetch_group_list, op_fetch_group_member_list, op_download_file],
     esm_entry_point = "ext:nbot_plugin/runtime.js",
     esm = [dir "src/plugin/js", "runtime.js"],
 );
@@ -67,13 +67,6 @@ impl PluginRuntime {
         let mut path = self.plugin_root.join(raw);
         if path.is_dir() {
             path = path.join("index.js");
-        }
-        // `ModuleSpecifier::from_file_path` requires an absolute path; in host mode our plugin root may
-        // be a relative path like `data/plugins/...`.
-        if path.is_relative() {
-            let cwd =
-                std::env::current_dir().map_err(|e| format!("Resolve current dir failed: {e}"))?;
-            path = cwd.join(path);
         }
         if !path.exists() {
             return Err(format!(
