@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.30
+ * nBot Smart Assistant Plugin v2.2.31
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (short, low-noise)
  */
@@ -37,7 +37,7 @@ import { containsKeyword } from "./utils/text.js";
 
 export default {
   onEnable() {
-    nbot.log.info("Smart Assistant Plugin v2.2.30 enabled");
+    nbot.log.info("Smart Assistant Plugin v2.2.31 enabled");
   },
 
   onDisable() {
