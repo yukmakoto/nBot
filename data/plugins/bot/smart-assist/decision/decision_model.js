@@ -24,9 +24,14 @@ function looksLikeInScopeHelpRequest(text) {
     "mc",
     "pcl",
     "java",
+    "bedrock",
+    "基岩",
     "forge",
     "fabric",
     "mod",
+    "optifine",
+    "sodium",
+    "rubidium",
     "lwjgl",
     "crash",
     "exception",
@@ -34,11 +39,24 @@ function looksLikeInScopeHelpRequest(text) {
     "error",
     "log.txt",
     "crash-reports",
+    "村民",
+    "繁殖",
+    "繁衍",
+    "末影珍珠",
+    "红石",
+    "附魔",
+    "光影",
+    "全英文",
+    "语言",
   ].some((k) => t.includes(k));
   if (keywordHits) return true;
 
   // Common Chinese troubleshooting patterns.
-  if (/(?:报错|错误|崩溃|闪退|卡死|无响应|打不开|开不了|启动不了|启动器|进不去|连不上|日志|存档|模组|整合包|服务端|服务器)/u.test(raw)) {
+  if (
+    /(?:报错|错误|崩溃|闪退|卡死|无响应|打不开|开不了|启动不了|启动器|进不去|连不上|日志|存档|模组|整合包|服务端|服务器|村民|繁殖|繁衍|语言|全英文)/u.test(
+      raw
+    )
+  ) {
     return true;
   }
 

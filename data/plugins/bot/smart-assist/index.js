@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.31
+ * nBot Smart Assistant Plugin v2.2.32
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (short, low-noise)
  */
@@ -33,11 +33,55 @@ import {
   sessions,
 } from "./state.js";
 import { cleanupStaleRequests } from "./timeouts.js";
-import { containsKeyword } from "./utils/text.js";
+import { containsKeyword, stripAllCqSegments } from "./utils/text.js";
+
+function looksLikeShortClarifyAnswer(text) {
+  const s = stripAllCqSegments(String(text || "")).trim();
+  if (!s) return false;
+  if (s.length > 10) return false;
+
+  const t = s.toLowerCase();
+  const direct = [
+    "java",
+    "java版",
+    "bedrock",
+    "基岩",
+    "基岩版",
+    "fabric",
+    "forge",
+    "paper",
+    "spigot",
+    "win",
+    "windows",
+    "mac",
+    "linux",
+    "ios",
+    "android",
+    "pc",
+    "电脑版",
+    "手机",
+    "是",
+    "不是",
+    "不",
+    "对",
+    "不对",
+    "可以",
+    "不可以",
+    "能",
+    "不能",
+  ];
+  if (direct.includes(t)) return true;
+
+  // Version-like answers: 1.20.1 / 25w41a
+  if (/^\d+\.\d+(?:\.\d+)?(?:[-_][0-9a-z]+)?$/i.test(t)) return true;
+  if (/^\d{2}w\d{2}[a-z]$/i.test(t)) return true;
+
+  return false;
+}
 
 export default {
   onEnable() {
-    nbot.log.info("Smart Assistant Plugin v2.2.31 enabled");
+    nbot.log.info("Smart Assistant Plugin v2.2.32 enabled");
   },
 
   onDisable() {
@@ -130,7 +174,7 @@ export default {
         addMessageToSession(session, "user", llmMessage || message, { mentioned: !!mentions.bot });
 
         // In an active session, default to replying every user turn (otherwise it feels "dead").
-        if (config.alwaysReplyInSession) {
+        if (config.alwaysReplyInSession && !session.passive) {
           if (pendingReplySessions.has(sessionKey)) {
             session.pendingUserInput = true;
             scheduleReplyFlush(sessionKey, config);
@@ -175,7 +219,8 @@ export default {
         });
         // Media updates should be handled promptly, but still go through the router to avoid redundant follow-ups
         // when another plugin (e.g. log analyzer) is already processing the same case.
-        scheduleDecisionFlush(sessionKey, !!(trigger.urgent || hasMedia || hasFile), config);
+        const urgentFollowup = session.passive && looksLikeShortClarifyAnswer(message);
+        scheduleDecisionFlush(sessionKey, !!(trigger.urgent || hasMedia || hasFile || urgentFollowup), config);
         return true;
       }
 

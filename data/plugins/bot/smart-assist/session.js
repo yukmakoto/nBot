@@ -50,6 +50,8 @@ export function createSession(sessionKey, userId, groupId, initialMessage, optio
     turnCount: 0,
     lastActivity: now,
     state: "active",
+    passive: !!options.passive, // passive sessions track context but don't auto-reply every turn
+    passiveCreatedAt: now,
     initialMessage,
     maxTurns: config.maxTurns,
     groupContext: null, // Will be populated with group announcements and history

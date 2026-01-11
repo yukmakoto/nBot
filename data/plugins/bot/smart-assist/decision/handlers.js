@@ -6,6 +6,34 @@ import { checkCooldown, createSession, addMessageToSession } from "../session.js
 import { maskSensitiveForLog } from "../utils/log.js";
 import { scheduleDecisionFlush } from "./batch.js";
 import { callDecisionModel } from "./decision_model.js";
+import { stripAllCqSegments } from "../utils/text.js";
+
+function looksLikeDirectHelpRequest(text) {
+  const s = stripAllCqSegments(String(text || "")).trim();
+  if (!s) return false;
+  if (s.length < 4) return false;
+
+  // Strong troubleshooting / help-seeking patterns.
+  if (
+    /(?:报错|错误|崩溃|闪退|卡死|无响应|打不开|开不了|进不去|连不上|掉线|延迟|日志|crash|exception|stack|error|fail)/iu.test(
+      s
+    )
+  ) {
+    return true;
+  }
+
+  // Common "asking for help" wording (avoid treating generic clarifying questions as help requests).
+  if (/(?:怎么办|怎么解决|怎么弄|怎么搞|如何|为何|为什么|咋办|求助|求救|帮忙|救命|请问)/u.test(s)) {
+    return true;
+  }
+
+  // General question marks, but require first-person / problem framing.
+  if (/[?？]/.test(s) && /(?:我|我的|为啥|怎么|出问题|有问题)/u.test(s)) {
+    return true;
+  }
+
+  return false;
+}
 
 // Handle decision result
 export function handleDecisionResult(requestInfo, success, content) {
@@ -188,6 +216,30 @@ export function handleDecisionResult(requestInfo, success, content) {
   );
 
   if (!shouldReply) {
+    // If the user seems to be asking for help but the router decided to IGNORE (often because others are already helping),
+    // keep a passive session so we can follow up after they answer clarifying questions.
+    if (!mentioned && !existing && looksLikeDirectHelpRequest(message)) {
+      const seedItems =
+        Array.isArray(items) && items.length
+          ? items.map((x) => String(x?.text ?? ""))
+          : message
+            ? [sanitizeMessageForLlm(message, null)]
+            : [];
+
+      if (seedItems.length) {
+        const primed = createSession(sessionKey, userId, groupId, seedItems[0] || "", {
+          mentionUserOnFirstReply: config.mentionUserOnFirstReply,
+          mentionUserOnEveryReply: config.mentionUserOnEveryReply,
+          passive: true,
+        });
+        primed.groupContext = groupContext || null;
+        for (const t of seedItems) {
+          addMessageToSession(primed, "user", sanitizeMessageForLlm(t, null) || t);
+        }
+        nbot.log.info("[smart-assist] primed passive session");
+      }
+    }
+
     const batch = decisionBatches.get(sessionKey);
     if (batch && batch.items.length) {
       const urgent = batch.items.some((x) => !!x?.mentioned);
@@ -199,6 +251,10 @@ export function handleDecisionResult(requestInfo, success, content) {
   // If a session already exists, only reply when the decision model says YES.
   // This makes the assistant feel more like a human in QQ group chats (not every turn must reply).
   if (existing && existing.state === "active") {
+    if (existing.passive) {
+      existing.passive = false;
+      nbot.log.info("[smart-assist] passive session activated");
+    }
     // Refresh group context for the reply model so it can see what happened in the group
     // (e.g. other plugins already analyzed a file) and avoid redundant follow-ups.
     if (groupContext) {
