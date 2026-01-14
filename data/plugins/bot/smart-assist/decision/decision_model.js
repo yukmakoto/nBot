@@ -26,6 +26,10 @@ function looksLikeInScopeHelpRequest(text) {
     "java",
     "bedrock",
     "基岩",
+    "键位",
+    "按键",
+    "快捷键",
+    "输入法",
     "forge",
     "fabric",
     "mod",
@@ -76,9 +80,12 @@ export function getDecisionTrigger(ctx, message, config) {
 
   const mentions = summarizeMentions(ctx);
   const mentioned = mentions.bot || isMentioningBot(ctx);
-  // Only run the router LLM on likely in-scope help requests (or explicit mentions).
-  const shouldCheck = mentioned || looksLikeInScopeHelpRequest(t);
-  return { shouldCheck, mentioned, urgent: mentioned };
+
+  // Only run the router LLM on likely in-scope help requests.
+  // Note: being @mentioned is NOT a valid reason to join casual chat; it only upgrades urgency
+  // when the message itself is within scope (or when media/reply-to-bot is present, handled by caller).
+  const inScope = looksLikeInScopeHelpRequest(t);
+  return { shouldCheck: inScope, mentioned, urgent: mentioned && inScope };
 }
 
 // Fetch group context (announcements and recent messages)

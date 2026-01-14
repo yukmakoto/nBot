@@ -1,5 +1,5 @@
 /**
- * nBot Smart Assistant Plugin v2.2.32
+ * nBot Smart Assistant Plugin v2.2.33
  * Auto-detects if user needs help, enters multi-turn conversation mode,
  * replies in a QQ-friendly style (short, low-noise)
  */
@@ -81,7 +81,7 @@ function looksLikeShortClarifyAnswer(text) {
 
 export default {
   onEnable() {
-    nbot.log.info("Smart Assistant Plugin v2.2.32 enabled");
+    nbot.log.info("Smart Assistant Plugin v2.2.33 enabled");
   },
 
   onDisable() {
@@ -128,6 +128,9 @@ export default {
       const videoUrls = extractVideoUrlsFromCtx(ctx);
       const recordUrls = extractRecordUrlsFromCtx(ctx);
       const replyCtx = extractReplyMessageContext(ctx);
+      const hasMedia = !!(imageUrls.length || videoUrls.length || recordUrls.length);
+      const hasFile =
+        String(llmMessage || message).includes("[文件]") || /\[CQ:file[,\]]/i.test(String(message || ""));
       if (imageUrls.length) {
         noteRecentGroupImages(group_id, imageUrls);
         noteRecentUserImages(sessionKey, imageUrls);
@@ -185,8 +188,6 @@ export default {
         }
 
         // Session follow-up: reply-thread is a strong signal the user is talking to the bot.
-        const hasMedia = !!(imageUrls.length || videoUrls.length || recordUrls.length);
-        const hasFile = String(llmMessage || message).includes("[文件]") || /\[CQ:file[,\]]/i.test(String(message || ""));
         const repliedToBot = !!replyCtx?.replyToBot;
         if (repliedToBot) {
           if (pendingReplySessions.has(sessionKey)) {
@@ -196,8 +197,21 @@ export default {
           return true;
         }
 
-        // Fallback: Let the decision model decide whether we should reply to this new message.
+        // Fallback: let the decision model decide whether we should reply to this new message.
+        // Important: do NOT route every single message in an active session (it makes the bot "chatty");
+        // only route when there is a strong signal the user is still asking for help.
         const trigger = getDecisionTrigger(ctx, message, config);
+        const clarifyFollowupWindowMs = 2 * 60 * 1000;
+        const recentBotQuestion =
+          !!session.lastAssistantAt && nbot.now() - Number(session.lastAssistantAt || 0) <= clarifyFollowupWindowMs;
+        const urgentFollowup =
+          (session.passive && looksLikeShortClarifyAnswer(message)) ||
+          (recentBotQuestion && looksLikeShortClarifyAnswer(message));
+        const shouldRoute = trigger.shouldCheck || hasMedia || hasFile || urgentFollowup;
+        if (!shouldRoute) {
+          return true;
+        }
+
         let batch = decisionBatches.get(sessionKey);
         if (!batch) {
           batch = { userId: user_id, groupId: group_id, items: [] };
@@ -219,7 +233,6 @@ export default {
         });
         // Media updates should be handled promptly, but still go through the router to avoid redundant follow-ups
         // when another plugin (e.g. log analyzer) is already processing the same case.
-        const urgentFollowup = session.passive && looksLikeShortClarifyAnswer(message);
         scheduleDecisionFlush(sessionKey, !!(trigger.urgent || hasMedia || hasFile || urgentFollowup), config);
         return true;
       }
@@ -233,7 +246,10 @@ export default {
 
       // Note: do not auto-reply on mention; still run through decision model to avoid the bot joining chat.
       // Mentions bypass cooldown but are flushed urgently (no merge wait).
-      const shouldCheck = (trigger.mentioned || checkCooldown(sessionKey, config.cooldownMs)) && trigger.shouldCheck;
+      const bypass =
+        !!replyCtx?.replyToBot || (trigger.mentioned && (hasMedia || hasFile));
+      const shouldCheck =
+        bypass || ((trigger.mentioned || checkCooldown(sessionKey, config.cooldownMs)) && trigger.shouldCheck);
       if (shouldCheck) {
         // Store a sanitized copy for LLM so CQ segments don't mislead the decision model.
         // Still keep the boolean mentioned flag from the real message segments.
@@ -256,7 +272,7 @@ export default {
           imageUrls,
           replySnippet: replyCtx ? replyCtx.snippet : "",
         });
-        scheduleDecisionFlush(sessionKey, trigger.urgent, config);
+        scheduleDecisionFlush(sessionKey, !!(trigger.urgent || bypass), config);
       }
 
       return true;
