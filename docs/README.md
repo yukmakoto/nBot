@@ -182,6 +182,17 @@ systemctl restart containerd docker
 
 重启后再 `docker pull` 一次即可。
 
+#### 回滚到上一版本（紧急）
+
+只要旧镜像仍在本机（或仓库可拉取），回滚就是切回旧 `NBOT_TAG`：
+
+```bash
+cd /opt/nbot
+export NBOT_TAG=v0.0.5
+docker compose up -d --remove-orphans
+docker compose ps
+```
+
 ---
 
 ## 2. 插件开发
