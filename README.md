@@ -55,6 +55,21 @@
   - `module`：ESM 入口，可用 `import`/多文件目录结构，需 `export default { ... }`
 - 安装包（`.nbp`）：支持打包整个目录树（不仅限 `index.js`）；签名校验基于包内文件树（不包含 `manifest.json`，避免用户配置写回导致签名失效）
 
+## 官方插件市场（nbot-site）
+
+当配置了 `NBOT_MARKET_URL` 时，nBot 会默认 **不再从镜像内置的 seed 插件目录同步插件**，而是以市场（`nbot-site`）为准：
+
+- 首次启动（仅当本地没有任何已安装插件）会自动从 Market 安装官方插件集
+- 插件包签名校验使用 `NBOT_OFFICIAL_PUBLIC_KEY_B64`（建议设置为 `nbot-site` 的 `/api/public-key`）
+
+相关环境变量：
+
+- `NBOT_MARKET_URL`：插件市场地址（例如 `https://nbot.nailed.dev`）
+- `NBOT_MARKET_BOOTSTRAP_OFFICIAL_PLUGINS`：是否在启动时自动同步官方插件（安装/更新；默认 `true`）
+- `NBOT_MARKET_FORCE_UPDATE`：是否强制重新安装官方插件（默认 `false`；一般不需要）
+- `NBOT_USE_SEED_BUILTIN_PLUGINS`：强制继续使用 seed 内置插件（默认 `false`）
+- `NBOT_DISABLE_SEED_BUILTIN_PLUGINS`：强制禁用 seed 内置插件（默认：当 `NBOT_MARKET_URL` 非空时启用）
+
 ## 目录结构
 
 - `backend/`：后端服务（API、机器人运行时、插件系统）

@@ -103,8 +103,15 @@ async fn main() {
         message_stats,
     });
 
+    // If configured, bootstrap official plugins from the market (first-run only).
+    // This enables "no bundled plugins" deployments where nbot-site is the source of truth.
+    plugin_handlers::bootstrap_official_plugins_startup(&state).await;
+
     // Load enabled plugins
     for plugin in plugins.list_enabled() {
+        if plugin_manager.is_loaded(&plugin.manifest.id) {
+            continue;
+        }
         if let Err(e) = plugin_manager.load(&plugin).await {
             error!("加载插件 {} 失败: {}", plugin.manifest.id, e);
         } else {
@@ -342,6 +349,10 @@ async fn main() {
         .route(
             "/market/install",
             post(plugin_handlers::install_from_market_handler),
+        )
+        .route(
+            "/market/sync",
+            post(plugin_handlers::sync_official_plugins_handler),
         )
         // Module routes
         .route("/modules", get(module::list_modules_handler))

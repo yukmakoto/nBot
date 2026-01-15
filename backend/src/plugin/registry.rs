@@ -31,13 +31,51 @@ impl PluginRegistry {
             state_file,
         };
 
-        // In Docker mode, built-in plugins live under /app/data.seed and are copied into the persisted data dir
-        // only once. This sync step updates built-in plugin code/manifest (without clobbering user config)
-        // so upgrades actually take effect for existing installs.
-        registry.sync_builtin_plugins_from_seed();
-        registry.scan_builtin_plugins();
+        // When the official market is configured, prefer market-distributed plugins over bundled seed plugins.
+        // This allows the bot image to stay thin and keeps plugin updates centralized in nbot-site.
+        if registry.should_use_seed_builtin_plugins() {
+            // In Docker mode, built-in plugins live under /app/data.seed and are copied into the persisted data dir
+            // only once. This sync step updates built-in plugin code/manifest (without clobbering user config)
+            // so upgrades actually take effect for existing installs.
+            registry.sync_builtin_plugins_from_seed();
+            registry.scan_builtin_plugins();
+        } else {
+            info!("已禁用内置 seed 插件（将从 Market 安装/更新）");
+        }
         registry.load_state();
         registry
+    }
+
+    fn should_use_seed_builtin_plugins(&self) -> bool {
+        let forced = std::env::var("NBOT_USE_SEED_BUILTIN_PLUGINS")
+            .ok()
+            .map(|v| {
+                let v = v.trim();
+                v.eq_ignore_ascii_case("1")
+                    || v.eq_ignore_ascii_case("true")
+                    || v.eq_ignore_ascii_case("yes")
+            })
+            .unwrap_or(false);
+        if forced {
+            return true;
+        }
+
+        let disabled = std::env::var("NBOT_DISABLE_SEED_BUILTIN_PLUGINS")
+            .ok()
+            .map(|v| {
+                let v = v.trim();
+                v.eq_ignore_ascii_case("1")
+                    || v.eq_ignore_ascii_case("true")
+                    || v.eq_ignore_ascii_case("yes")
+            })
+            .unwrap_or(false);
+        if disabled {
+            return false;
+        }
+
+        // Default: if Market is configured, don't use seed built-ins.
+        let market = std::env::var("NBOT_MARKET_URL").unwrap_or_else(|_| "".to_string());
+        market.trim().is_empty()
     }
 
     fn detect_seed_data_dir() -> Option<PathBuf> {

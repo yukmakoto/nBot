@@ -12,6 +12,8 @@ data/state
 data/state/**
 data/bots
 data/bots/**
+data/plugins
+data/plugins/**
 data/plugins/storage
 data/plugins/storage/**
 data/keys

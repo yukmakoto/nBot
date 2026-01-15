@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Copy, Download, Eye, EyeOff, Info, Shield, X } from 'lucide-react';
+import { Copy, Download, Eye, EyeOff, Info, RefreshCw, Shield, X } from 'lucide-react';
 
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -71,6 +71,8 @@ export function SettingsPage() {
           loading={dockerQuery.isLoading}
         />
       </div>
+
+      <OfficialPluginsSyncCard />
 
       <ExportCard />
     </div>
@@ -225,6 +227,78 @@ function InfoCard({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+type SyncOfficialPluginsReport = {
+  installed: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+};
+
+function OfficialPluginsSyncCard() {
+  const [busy, setBusy] = useState(false);
+  const [forceUpdate, setForceUpdate] = useState(false);
+  const [report, setReport] = useState<SyncOfficialPluginsReport | null>(null);
+
+  async function sync() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = forceUpdate ? { force_update: true } : {};
+      const resp = await api.post('/market/sync', payload, { timeout: 120_000 });
+      if (resp.data?.status !== 'success') {
+        toast.error(resp.data?.message ?? '同步失败');
+        return;
+      }
+
+      const next = resp.data?.report as SyncOfficialPluginsReport | undefined;
+      if (!next) {
+        toast.error('同步失败：后端返回无效数据');
+        return;
+      }
+
+      setReport(next);
+      toast.success(`同步完成：安装 ${next.installed} / 更新 ${next.updated} / 失败 ${next.failed}`);
+    } catch (e: unknown) {
+      toast.error(getApiErrorMessage(e, '同步失败'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card-md">
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <div className="font-black text-text-main text-lg mb-1">官方插件同步</div>
+          <div className="text-xs text-text-main/60 font-bold">
+            从插件市场同步官方插件（保留配置与启用状态）
+          </div>
+          {report ? (
+            <div className="mt-3 text-xs font-bold text-text-main/60">
+              上次结果：安装 {report.installed}，更新 {report.updated}，跳过 {report.skipped}，失败 {report.failed}
+            </div>
+          ) : null}
+          <label className="mt-4 inline-flex items-center gap-2 text-xs font-bold text-text-main/60 select-none">
+            <input
+              type="checkbox"
+              className="accent-brand"
+              checked={forceUpdate}
+              onChange={(e) => setForceUpdate(e.target.checked)}
+              disabled={busy}
+            />
+            强制更新（即使版本未提升）
+          </label>
+        </div>
+
+        <button className="btn-primary flex items-center gap-2" onClick={sync} disabled={busy}>
+          <RefreshCw className={busy ? 'w-4 h-4 animate-spin' : 'w-4 h-4'} />
+          {busy ? '同步中...' : '立即同步'}
+        </button>
+      </div>
     </div>
   );
 }

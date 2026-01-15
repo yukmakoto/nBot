@@ -10,4 +10,7 @@ pub use manage::{
     disable_plugin_handler, enable_plugin_handler, list_installed_handler,
     uninstall_plugin_handler, update_plugin_config_handler,
 };
-pub use market::{install_from_market_handler, list_market_plugins_handler};
+pub use market::{
+    bootstrap_official_plugins_startup, install_from_market_handler, list_market_plugins_handler,
+    sync_official_plugins_handler,
+};

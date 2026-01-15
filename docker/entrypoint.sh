@@ -17,7 +17,15 @@ if [[ -d "${SEED_DIR}" ]]; then
   # Built-in plugin code should be updated when the image updates.
   # In Docker deployments, /app/data is typically a persistent volume, so without this sync
   # plugin JS files can get stuck on an old version forever.
-  SYNC_BUILTIN_PLUGINS="${NBOT_SYNC_BUILTIN_PLUGINS:-1}"
+  SYNC_BUILTIN_PLUGINS="${NBOT_SYNC_BUILTIN_PLUGINS:-}"
+  if [[ -z "${SYNC_BUILTIN_PLUGINS}" ]]; then
+    # Default: when a Market is configured, don't sync seed plugins.
+    if [[ -n "${NBOT_MARKET_URL:-}" ]]; then
+      SYNC_BUILTIN_PLUGINS="0"
+    else
+      SYNC_BUILTIN_PLUGINS="1"
+    fi
+  fi
   if [[ "${SYNC_BUILTIN_PLUGINS}" != "0" && -d "${SEED_DIR}/plugins" ]]; then
     mkdir -p "${DATA_DIR}/plugins"
     cp -a "${SEED_DIR}/plugins/." "${DATA_DIR}/plugins/"

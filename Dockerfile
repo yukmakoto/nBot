@@ -76,6 +76,8 @@ COPY --from=frontend-dist /dist /app/dist
 COPY assets /app/assets
 # Built-in definitions (modules/commands/plugins). Runtime state is persisted via volume.
 COPY data /app/data.seed
+# Image slimming: do not bundle built-in plugin code in the bot image (official plugins are served by nbot-site).
+RUN rm -rf /app/data.seed/plugins || true
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
