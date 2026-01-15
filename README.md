@@ -10,6 +10,10 @@
   带 WebUI 的 QQ Bot 框架（Rust/Axum + React WebUI）。默认通过 NapCat（OneBot 11）接入 QQ，支持插件化扩展与工具容器。
 </p>
 
+## 文档
+
+完整文档（快速开始 / 插件开发 / 框架建设）：`docs/README.md`
+
 ## 一键部署（Linux）
 
 只依赖：`sudo` + `curl`。脚本会交互式选择主程序运行方式：

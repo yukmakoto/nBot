@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Copy, Download, Eye, EyeOff, Info, RefreshCw, Shield, X } from 'lucide-react';
 
@@ -239,6 +239,7 @@ type SyncOfficialPluginsReport = {
 };
 
 function OfficialPluginsSyncCard() {
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [forceUpdate, setForceUpdate] = useState(false);
   const [report, setReport] = useState<SyncOfficialPluginsReport | null>(null);
@@ -262,6 +263,8 @@ function OfficialPluginsSyncCard() {
 
       setReport(next);
       toast.success(`同步完成：安装 ${next.installed} / 更新 ${next.updated} / 失败 ${next.failed}`);
+      await queryClient.invalidateQueries({ queryKey: ['plugins-installed'] });
+      await queryClient.invalidateQueries({ queryKey: ['plugins-market'] });
     } catch (e: unknown) {
       toast.error(getApiErrorMessage(e, '同步失败'));
     } finally {

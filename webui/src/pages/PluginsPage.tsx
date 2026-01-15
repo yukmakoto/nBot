@@ -43,10 +43,21 @@ export function PluginsPage() {
   const installed = installedQuery.data ?? EMPTY_INSTALLED;
   const market = marketQuery.data ?? EMPTY_MARKET;
 
+  const installedVersions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of installed) {
+      const id = p?.manifest?.id;
+      if (!id) continue;
+      map.set(id, p.manifest.version ?? '');
+    }
+    return map;
+  }, [installed]);
+
   const filteredMarket = useMemo(() => {
     const q = query.trim().toLowerCase();
     return market.filter((p) => {
-      const isModule = p.plugin_type === 'module' || !p.plugin_type;
+      const kind = (p.plugin_type ?? '').trim().toLowerCase();
+      const isModule = kind === 'module';
       const typeMatch = category === 'modules' ? isModule : !isModule;
       const searchMatch =
         !q ||
@@ -153,7 +164,12 @@ export function PluginsPage() {
           ) : (
             <div className="space-y-3">
               {filteredMarket.map((p) => (
-                <MarketRow key={p.id} plugin={p} isModule={category === 'modules'} />
+                <MarketRow
+                  key={p.id}
+                  plugin={p}
+                  isModule={category === 'modules'}
+                  installedVersion={installedVersions.get(p.id)}
+                />
               ))}
               {!filteredMarket.length ? (
                 <div className="text-center py-12 text-brand/20 bg-brand-soft/50 rounded-3xl border-2 border-dashed border-brand-soft">
@@ -221,8 +237,9 @@ function InstalledRow({ plugin, onConfig }: { plugin: InstalledPlugin; onConfig:
     }
   }
 
-  const type = plugin.manifest.type ?? 'extension';
-  const typeLabel = type === 'module' || type === 'bot' ? '模块' : type === 'plugin' ? '插件' : '扩展';
+  const type = (plugin.manifest.type ?? 'plugin').trim().toLowerCase();
+  const typeLabel =
+    type === 'module' ? '模块' : type === 'platform' ? '平台' : type === 'plugin' || type === 'bot' ? '插件' : '扩展';
 
   return (
     <div className="bg-white rounded-[32px] p-7 hover:shadow-xl transition-all duration-500 group relative border border-brand-soft">
@@ -286,12 +303,22 @@ function InstalledRow({ plugin, onConfig }: { plugin: InstalledPlugin; onConfig:
   );
 }
 
-function MarketRow({ plugin, isModule }: { plugin: MarketPlugin; isModule: boolean }) {
+function MarketRow({
+  plugin,
+  isModule,
+  installedVersion,
+}: {
+  plugin: MarketPlugin;
+  isModule: boolean;
+  installedVersion?: string;
+}) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const installed = Boolean(installedVersion);
 
   async function install() {
     if (busy) return;
+    if (installed) return;
     setBusy(true);
     try {
       const resp = await api.post('/market/install', { plugin_id: plugin.id, source: 'market' });
@@ -337,6 +364,9 @@ function MarketRow({ plugin, isModule }: { plugin: MarketPlugin; isModule: boole
           <p className="text-xs text-brand/40 mt-1 font-bold">
             v{plugin.version} · {plugin.author}
           </p>
+          {installed && installedVersion !== plugin.version ? (
+            <p className="text-xs text-brand/40 mt-1 font-bold">本地版本：v{installedVersion}</p>
+          ) : null}
         </div>
         <div className="flex items-center gap-5 shrink-0">
           <span className="text-xs text-brand/20 flex items-center gap-1.5 font-bold">
@@ -350,14 +380,16 @@ function MarketRow({ plugin, isModule }: { plugin: MarketPlugin; isModule: boole
                 : 'px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 active:scale-95 disabled:bg-sky-100 text-white font-bold text-sm transition shadow-lg shadow-sky-100 flex items-center gap-2'
             }
             onClick={install}
-            disabled={busy}
+            disabled={busy || installed}
           >
             {busy ? (
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : installed ? (
+              <Package className="w-4 h-4" />
             ) : (
               <Download className="w-4 h-4" />
             )}
-            {busy ? '安装中' : '安装'}
+            {busy ? '安装中' : installed ? '已安装' : '安装'}
           </button>
         </div>
       </div>
