@@ -132,6 +132,56 @@ NBOT_OFFICIAL_PUBLIC_KEY_B64=<output of https://<your-nbot-site>/api/public-key>
 - `POST /api/market/sync`：同步官方插件（安装/更新；保留配置与启用状态）
 - `GET /api/plugins/installed`：查看本地已安装插件
 
+### 1.7 生产升级（不在 VPS 编译）
+
+生产环境建议始终走“拉镜像 + 重启容器”的方式（不要在 VPS 上编译）。
+
+以默认安装目录 `/opt/nbot` 为例：
+
+```bash
+cd /opt/nbot
+export NBOT_TAG=v0.0.6
+docker pull docker.nailed.dev/yukmakoto/nbot-bot:$NBOT_TAG
+docker pull docker.nailed.dev/yukmakoto/nbot-render:$NBOT_TAG
+docker compose up -d --remove-orphans
+docker compose ps
+```
+
+#### docker pull 很慢/卡住怎么处理
+
+1) **确认镜像存在**（避免“拉不存在的 tag”浪费时间）
+
+```bash
+curl -fsSL -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+  https://docker.nailed.dev/v2/yukmakoto/nbot-bot/manifests/$NBOT_TAG >/dev/null
+```
+
+2) **Cloudflare 路径慢**：可临时让机器直连源站（只建议临时使用；完成后恢复）
+
+```bash
+echo '<origin_ip> docker.nailed.dev # nbot-registry-bypass' >> /etc/hosts
+```
+
+完成后清理：
+
+```bash
+tmp=$(mktemp); awk '!/nbot-registry-bypass/' /etc/hosts > "$tmp"; cat "$tmp" > /etc/hosts; rm -f "$tmp"
+```
+
+3) **containerd layer 锁死导致一直“没进度”**：日志会出现类似
+
+```text
+layer-sha256:<digest> locked for ...: unavailable
+```
+
+这通常是一次失败的拉取留下的锁。处理方式：
+
+```bash
+systemctl restart containerd docker
+```
+
+重启后再 `docker pull` 一次即可。
+
 ---
 
 ## 2. 插件开发
@@ -420,4 +470,3 @@ POST /api/chat/send
   - 设置固定 `NBOT_API_TOKEN`，并妥善保存
   - 配置 `NBOT_MARKET_URL` + `NBOT_OFFICIAL_PUBLIC_KEY_B64`，并关闭 `NBOT_ALLOW_UNSIGNED_PLUGINS`
   - 多 QQ 实例时关注 NapCat 容器资源占用（CPU/内存/磁盘）
-
